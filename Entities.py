@@ -3,12 +3,12 @@ import random
 import Assets
 
 # --- Global Gameplay Settings ---
-# Damage values for units
+# Damage values for units based on descriptions
 UNIT_DAMAGE = {
-    "McUncle": 34,
-    "Bob": 25,
-    "Dracula": 40,
-    "TheHamster": 30
+    "McUncle": 50,      # Deadly horseman
+    "Bob": 5,           # Useless RAT
+    "Dracula": 30,      # Deadly blood sucker
+    "TheHamster": 20    # Deadly hobo
 }
 
 # Bob's Windmill Boost (0.5 = 50% per Bob)
@@ -122,25 +122,14 @@ class Windmill:
         self._init_static_llamas()
 
     def _init_static_llamas(self):
-        # We want llamas STRICTLY on the generated alfalfa tiles
         frames = []
         if "eat" in Assets._loaded_llama_sprites and "south" in Assets._loaded_llama_sprites["eat"]:
             frames = Assets._loaded_llama_sprites["eat"]["south"]
         if not frames: return
 
-        # Get valid alfalfa grid coordinates
         alfalfa_coords = self.get_alfalfa_coords()
-        
-        # Pick 4 specific tiles for the llamas to ensure they are ON the alfalfa
-        # We can pick 4 distinct indices
         if len(alfalfa_coords) >= 4:
-            # Pick Top, Right, Bottom, Left roughly
-            # Sort by row then col
             alfalfa_coords.sort()
-            
-            # Select specific indices that usually correspond to the middle of the sides
-            # Top row is first few, Bottom row is last few
-            # This is a simple heuristic selection
             selected_coords = [
                 alfalfa_coords[1], # Top
                 alfalfa_coords[len(alfalfa_coords)//2 - 1], # Left
@@ -151,12 +140,9 @@ class Windmill:
             selected_coords = alfalfa_coords[:4]
 
         for r, c in selected_coords:
-            # Convert grid to exact pixel position (centered on tile)
-            # Subtract some offset to center the llama sprite (assuming sprite is approx tile size)
-            # Llama sprite is scaled 1.5x tile size, so we center it
             sprite_w = self.tile_size * Assets.LLAMA_SCALE_FACTOR
             offset_x = (self.tile_size - sprite_w) / 2
-            offset_y = (self.tile_size - sprite_w) / 2 # Slightly higher
+            offset_y = (self.tile_size - sprite_w) / 2 
 
             px = c * self.tile_size + offset_x
             py = r * self.tile_size + offset_y
@@ -180,21 +166,18 @@ class Windmill:
         return coords
 
     def update(self, dt, hamsters=[]):
-        # Animation
         self.animation_timer += dt
         if self.animation_timer >= self.animation_speed:
             if self.sprites:
                 self.animation_frame = (self.animation_frame + 1) % len(self.sprites)
             self.animation_timer = 0.0
             
-        # Llama Animations
         llama_anim_speed = 8.0 * dt 
         for llama in self.static_llamas:
             llama['frame_idx'] += llama_anim_speed
             if llama['frame_idx'] >= len(llama['frames']):
                 llama['frame_idx'] = 0
         
-        # Calculate Bob Boost (Additive)
         center = self.current_pixel_pos + pygame.Vector2(self.tile_size, self.tile_size)
         boost_multiplier = 1.0
         
@@ -204,7 +187,6 @@ class Windmill:
                 if center.distance_to(h_center) < 150: 
                     boost_multiplier += BOB_BOOST_PER_UNIT
 
-        # Cheese Production
         time_increment = dt * boost_multiplier
         self.cheese_timer += time_increment
         cheese_produced = 0
@@ -218,21 +200,12 @@ class Windmill:
         return min(1.0, self.cheese_timer / self.CHEESE_GENERATION_TIME)
 
     def draw(self, screen):
-        # Alfalfa
         if self.alfalfa_sprite:
             for r, c in self.get_alfalfa_coords():
                 draw_x = c * self.tile_size
                 draw_y = r * self.tile_size
                 screen.blit(self.alfalfa_sprite, (draw_x, draw_y))
 
-        # Static Llamas (Behind/Around Windmill logic needed? 
-        # Drawing them before windmill puts them behind if overlapping top, 
-        # but in front for bottom. Z-sorting is complex, simple draw order here:
-        # Alfalfa -> Llamas -> Windmill (covers top llamas) -> Progress
-        
-        # Sort llamas by Y to fake depth?
-        # self.static_llamas.sort(key=lambda l: l['y']) # Optional
-        
         for llama in self.static_llamas:
             frames = llama['frames']
             idx = int(llama['frame_idx']) % len(frames)
@@ -243,7 +216,6 @@ class Windmill:
             sprite = self.sprites[self.animation_frame]
             screen.blit(sprite, (self.current_pixel_pos.x, self.current_pixel_pos.y))
         
-        # Progress Bar
         bar_w = self.width_tiles * self.tile_size
         bar_h = 8
         x = self.current_pixel_pos.x
@@ -390,7 +362,6 @@ class Castle:
         bar_width = self.tile_size * self.width_tiles
         bar_height = 8
         
-        # Draw Health Bar ONLY if damaged
         if self.health < self.max_health:
             hx = self.current_pixel_pos.x
             hy = self.current_pixel_pos.y - 25
@@ -399,7 +370,6 @@ class Castle:
             pygame.draw.rect(screen, (0, 255, 0), (hx, hy, bar_width * hp_pct, bar_height))
             pygame.draw.rect(screen, (255, 255, 255), (hx, hy, bar_width, bar_height), 1)
 
-        # Draw Training Progress
         if self.training_queue:
             x = self.current_pixel_pos.x
             y = self.current_pixel_pos.y - 10
@@ -432,7 +402,8 @@ class Enemy:
         self.max_health = 100
         self.facing_right = True 
         
-        self.speed = 1.5
+        self.base_speed = 1.5
+        self.speed_multiplier = 1.0 # Reset every frame
         self.attack_cooldown = 1.0
         self.attack_timer = 0.0
         self.damage = 50
@@ -468,7 +439,12 @@ class Enemy:
                     if norm.x > 0: self.facing_right = True
                     else: self.facing_right = False
                     
-                    self.current_pixel_pos += norm * self.speed
+                    # Apply speed modifier
+                    current_speed = self.base_speed * self.speed_multiplier
+                    self.current_pixel_pos += norm * current_speed
+        
+        # Reset multiplier for next frame (so slow only applies if hamster is near)
+        self.speed_multiplier = 1.0
 
     def draw(self, screen):
         if self.frames:
@@ -489,6 +465,7 @@ class Enemy:
 class Llama:
     def __init__(self, start_grid_pos, tile_size, game_grid, llama_walkable_coords, all_llamas_ref):
         self.grid_r, self.grid_c = start_grid_pos
+        self.target_grid_r, self.target_grid_c = start_grid_pos 
         self.tile_size = tile_size
         self.game_grid = game_grid 
         self.llama_walkable_coords = set(llama_walkable_coords) 
@@ -863,11 +840,8 @@ class McUncle:
                             diff = self.current_pixel_pos - f.current_pixel_pos
                             sep_vec += diff.normalize() * (SEPARATION_FORCE / dist)
                 
-                # Apply movement + separation (scaled by dt handled in main loop tick really, but here speed is pixels/frame approx in original code logic, or needs dt)
-                # Original code used speed as pixels per update roughly. Let's stick to simple addition.
-                
                 # Check next pos validity
-                next_pos = self.current_pixel_pos + move_vec + (sep_vec * 0.05) # Small separation factor
+                next_pos = self.current_pixel_pos + move_vec + (sep_vec * 0.05) 
                 
                 center_x = next_pos.x + self.tile_size/2
                 center_y = next_pos.y + self.tile_size/2
@@ -1037,6 +1011,16 @@ class Hamster:
                 self.cooldown_timer = self.attack_cooldown
                 proj = Projectile(my_center, closest_enemy, self.name)
                 projectiles_list.append(proj)
+        
+        # Apply slow logic for "The Hamster"
+        if self.name == "The Hamster" and enemies_list:
+            my_center = self.current_pixel_pos + pygame.Vector2(self.tile_size/2, self.tile_size/2)
+            # Apply slow to all enemies within attack range (or slightly larger?)
+            # Let's say range 200
+            for enemy in enemies_list:
+                en_center = enemy.current_pixel_pos + pygame.Vector2(enemy.tile_size/2, enemy.tile_size/2)
+                if my_center.distance_to(en_center) < 200:
+                    enemy.speed_multiplier = 0.8 # 20% slow
 
     def draw(self, screen):
         frames = self.sprites.get(self.state, self.sprites.get("idle", []))

@@ -3,7 +3,7 @@ import pygame
 import random
 import os
 import sys
-import math # Added for formations
+import math 
 import Assets 
 from Entities import Llama, McUncle, Hamster, Enemy, Projectile, Castle, Windmill, CASTLE_HITBOX_WIDTH_TILES, CASTLE_HITBOX_HEIGHT_TILES
 import MenuUI 
@@ -16,6 +16,7 @@ ROWS = HEIGHT // TILE_SIZE
 TILES_SEARCH_FOLDERS = ["", "tiles", "assets"] 
 SAVE_FOLDER = "saved_maps"
 INITIAL_WAVE_TIMER = 200.0 
+STAGE_COOLDOWN_TIME = 10.0
 
 # ---------------- PLAYER INTERACTION STATE ----------------
 current_tool = "none" 
@@ -34,14 +35,21 @@ windmills = []
 castle = None 
 
 # Game State
-cheese_count = 0
+cheese_count = 5 # Start with 5 cheese
 game_timer = INITIAL_WAVE_TIMER
 current_wave_duration = INITIAL_WAVE_TIMER
-wave_number = 1
+
+stage_number = 1
+wave_in_stage = 1
+max_stages = 10
+
 enemies_attacking = False
 game_over = False
-waiting_for_continue = False
-continue_timer = 5.0
+waiting_for_stage_start = False
+stage_cooldown_timer = 0.0
+
+# Windmill Economy
+next_windmill_cost = 0
 
 # Selection Variables
 selected_entity = None 
@@ -49,7 +57,7 @@ selected_llama_context = None
 selection_drag_start = None
 selection_rect = None
 selected_units = [] 
-active_formation = "line" # Default formation
+active_formation = "none" # Default formation is X (none)
 
 # For selecting and deleting fences
 selected_removable_object = None 
@@ -84,6 +92,7 @@ pygame.display.set_caption("Hamster Path Defense")
 font = pygame.font.Font(None, 28)
 timer_font = pygame.font.Font(None, 32)
 game_over_font = pygame.font.Font(None, 72)
+stage_font = pygame.font.Font(None, 48)
 delete_font = pygame.font.Font(None, 32)
 clock = pygame.time.Clock()
 
@@ -217,33 +226,42 @@ def get_formation_positions(center_pixel_pos, unit_count, formation_type, spacin
     if unit_count == 1: return [center_pixel_pos]
 
     if formation_type == "line":
-        # Horizontal line centered on click
-        start_x = cx - ((unit_count - 1) * spacing) / 2
+        # Vertical Formation
+        MAX_PER_COL = 10
+        num_cols = math.ceil(unit_count / MAX_PER_COL)
+        total_width = (num_cols - 1) * spacing
+        start_x = cx - total_width / 2
+        
         for i in range(unit_count):
-            positions.append((start_x + i * spacing, cy))
+            col = i // MAX_PER_COL
+            row = i % MAX_PER_COL
+            current_col_size = min(MAX_PER_COL, unit_count - (col * MAX_PER_COL))
+            start_y = cy - ((current_col_size - 1) * spacing) / 2
+            
+            px = start_x + col * spacing
+            py = start_y + row * spacing
+            positions.append((px, py))
             
     elif formation_type == "double":
-        # Double Line
         row1_count = math.ceil(unit_count / 2)
         row2_count = unit_count - row1_count
+        start_x1 = cx - spacing / 2
+        start_x2 = cx + spacing / 2
         
-        # Row 1
-        start_x1 = cx - ((row1_count - 1) * spacing) / 2
-        y1 = cy - spacing / 2
+        height1 = (row1_count - 1) * spacing
+        start_y1 = cy - height1 / 2
         for i in range(row1_count):
-            positions.append((start_x1 + i * spacing, y1))
+            positions.append((start_x1, start_y1 + i * spacing))
             
-        # Row 2
-        start_x2 = cx - ((row2_count - 1) * spacing) / 2
-        y2 = cy + spacing / 2
+        height2 = (row2_count - 1) * spacing
+        start_y2 = cy - height2 / 2
         for i in range(row2_count):
-            positions.append((start_x2 + i * spacing, y2))
+            positions.append((start_x2, start_y2 + i * spacing))
             
     elif formation_type == "square":
         side = math.ceil(math.sqrt(unit_count))
         start_x = cx - ((side - 1) * spacing) / 2
         start_y = cy - ((side - 1) * spacing) / 2
-        
         idx = 0
         for r in range(side):
             for c in range(side):
@@ -252,11 +270,9 @@ def get_formation_positions(center_pixel_pos, unit_count, formation_type, spacin
                     idx += 1
                     
     elif formation_type == "circle":
-        # Circumference approx spacing * count
         circumference = spacing * unit_count
         radius = circumference / (2 * math.pi)
         if radius < spacing: radius = spacing
-        
         for i in range(unit_count):
             angle = i * (2 * math.pi / unit_count)
             px = cx + radius * math.cos(angle)
@@ -264,7 +280,7 @@ def get_formation_positions(center_pixel_pos, unit_count, formation_type, spacin
             positions.append((px, py))
             
     else:
-        # Default blob/point
+        # Default
         for i in range(unit_count):
             positions.append((cx, cy))
             
@@ -368,24 +384,18 @@ def draw(seed, grid, features, ui_control_panel):
     # Repair Wrench Logic
     repair_button_rect = None
     if ui_control_panel.castle_menu_active and castle and castle.health < castle.max_health:
-        # If castle menu is active, it means castle is selected. 
-        # Show wrench above castle
         wrench_img = tiles.get("wrench")
         if wrench_img:
-            # Position relative to castle on screen
             cx, cy = _world_to_screen_pixel(castle.current_pixel_pos.x, castle.current_pixel_pos.y)
             w_size = 64
-            # Scale if needed
             wrench_scaled = pygame.transform.scale(wrench_img, (w_size, w_size))
             
-            # Position centered above castle
             rx = cx + (castle.width_tiles * TILE_SIZE * zoom_level)/2 - w_size/2
             ry = cy - w_size - 10
             
             screen.blit(wrench_scaled, (rx, ry))
             repair_button_rect = pygame.Rect(rx, ry, w_size, w_size)
             
-            # Draw Cost
             cost = castle.get_repair_cost()
             cost_txt = font.render(f"{cost}", True, (255, 255, 0))
             screen.blit(cost_txt, (rx + w_size + 5, ry + w_size//2 - 10))
@@ -428,67 +438,86 @@ def draw(seed, grid, features, ui_control_panel):
     ui_x_right = WIDTH - 80 
     ui_y_right = 20
     
-    # 1. Cheese Icon & Count
+    # 1. Cheese Icon & Count (Aligned Better)
     if "cheese" in tiles:
         cheese_icon = pygame.transform.scale(tiles["cheese"], (40, 40))
+        # Draw Icon
         screen.blit(cheese_icon, (ui_x_right, ui_y_right))
-        cheese_text = font.render(f"x {cheese_count}", True, (255, 255, 255))
-        screen.blit(cheese_text, (ui_x_right, ui_y_right + 45))
+        # Draw Text to the LEFT of icon or below? Request: "text of cheese is at the bottom... fix"
+        # Let's put text to the LEFT of the icon
+        cheese_text = font.render(f"{cheese_count}", True, (255, 255, 255))
+        screen.blit(cheese_text, (ui_x_right - cheese_text.get_width() - 5, ui_y_right + 10))
+        
+        # Windmill Cost Tooltip (optional, showing next cost)
+        cost_txt = ui_control_panel.price_font.render(f"Next Mill: {next_windmill_cost}", True, (200, 200, 200))
+        screen.blit(cost_txt, (ui_x_right - 40, ui_y_right + 45))
+
     ui_y_right += 80
 
-    # 2. Queue List
-    if castle:
-        if castle.training_queue:
-            queue_label = font.render("Queue:", True, (200, 200, 200))
-            # Center label somewhat relative to icons
-            screen.blit(queue_label, (ui_x_right - 10, ui_y_right))
-            ui_y_right += 25
+    # 2. Queue List (Floating on top of Castle)
+    if castle and castle.training_queue:
+        cx, cy = _world_to_screen_pixel(castle.current_pixel_pos.x, castle.current_pixel_pos.y)
+        
+        queue_w = 30 
+        total_w = len(castle.training_queue) * (queue_w + 2)
+        
+        castle_screen_w = castle.width_tiles * TILE_SIZE * zoom_level
+        start_x = cx + (castle_screen_w - total_w) / 2
+        
+        start_y = cy - 40 
+        
+        current_qx = start_x
+        for unit_name in castle.training_queue:
+            unit_icon = None
+            if unit_name == "McUncle" and "mcuncle" in tiles and tiles["mcuncle"]:
+                unit_icon = tiles["mcuncle"][0]
+            elif unit_name in ["Bob", "Dracula", "TheHamster"] and "hamsters" in tiles:
+                if unit_name in tiles["hamsters"] and "idle" in tiles["hamsters"][unit_name]:
+                    unit_icon = tiles["hamsters"][unit_name]["idle"][0]
             
-            for unit_name in castle.training_queue:
-                unit_icon = None
-                if unit_name == "McUncle" and "mcuncle" in tiles and tiles["mcuncle"]:
-                    unit_icon = tiles["mcuncle"][0]
-                elif unit_name in ["Bob", "Dracula", "TheHamster"] and "hamsters" in tiles:
-                    if unit_name in tiles["hamsters"] and "idle" in tiles["hamsters"][unit_name]:
-                        unit_icon = tiles["hamsters"][unit_name]["idle"][0]
-                
-                if unit_icon:
-                    scaled_icon = pygame.transform.scale(unit_icon, (30, 30))
-                    screen.blit(scaled_icon, (ui_x_right + 5, ui_y_right))
-                else:
-                    pygame.draw.rect(screen, (100,100,100), (ui_x_right + 5, ui_y_right, 30, 30))
-                
-                ui_y_right += 35
+            if unit_icon:
+                scaled_icon = pygame.transform.scale(unit_icon, (queue_w, queue_w))
+                screen.blit(scaled_icon, (current_qx, start_y))
+            else:
+                pygame.draw.rect(screen, (100,100,100), (current_qx, start_y, queue_w, queue_w))
+            
+            current_qx += queue_w + 2
 
-    # --- Left Side Info (Timer) ---
+
+    # --- Left Side Info (Timer & Stage) ---
     ui_x_left = 20
     ui_y_left = 20
     
     timer_color = (255, 255, 255)
-    if game_timer <= 5.0 and not enemies_attacking:
+    if game_timer <= 5.0 and not enemies_attacking and not waiting_for_stage_start:
         timer_color = (255, 50, 50) 
     
     if enemies_attacking:
         timer_str = "Status: WAVE ATTACK!"
         timer_color = (255, 0, 0)
-    elif waiting_for_continue:
-        timer_str = "Status: Wave Cleared"
+    elif waiting_for_stage_start:
+        timer_str = "Status: STAGE CLEARED"
     else:
         timer_str = f"Time until Enemy attacks: {int(game_timer)}s"
         
     txt_timer = timer_font.render(timer_str, True, timer_color)
     screen.blit(txt_timer, (ui_x_left, ui_y_left))
     
-    # --- Continue Screen Overlay ---
-    if waiting_for_continue:
+    # Stage Info
+    stage_str = f"Stage: {stage_number} | Wave: {wave_in_stage}/5"
+    txt_stage = font.render(stage_str, True, (200, 200, 255))
+    screen.blit(txt_stage, (ui_x_left, ui_y_left + 35))
+    
+    # --- Stage Clear Overlay ---
+    if waiting_for_stage_start:
         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 150))
         screen.blit(overlay, (0, 0))
         
-        msg = game_over_font.render("Wave Cleared!", True, (0, 255, 0))
-        screen.blit(msg, (WIDTH//2 - msg.get_width()//2, HEIGHT//2 - 50))
+        msg = stage_font.render("Stage cleared roller", True, (0, 255, 0))
+        sub = font.render(f"Next stage starts in {int(stage_cooldown_timer)} seconds, hope you are ready", True, (255, 255, 255))
         
-        sub = font.render(f"Next wave in {int(continue_timer)}...", True, (255, 255, 255))
+        screen.blit(msg, (WIDTH//2 - msg.get_width()//2, HEIGHT//2 - 50))
         screen.blit(sub, (WIDTH//2 - sub.get_width()//2, HEIGHT//2 + 20))
 
     # --- Game Over Overlay ---
@@ -510,8 +539,9 @@ async def main():
     global selected_removable_object, delete_button_rect, zoom_level, camera_x, camera_y, render_offset_x, render_offset_y, is_dragging, last_mouse_pos
     global game_timer, enemies_attacking, game_over, repair_button_rect
     global selection_drag_start, selection_rect, selected_units
-    global current_wave_duration, wave_number, waiting_for_continue, continue_timer
+    global current_wave_duration, wave_number, waiting_for_continue
     global active_formation
+    global stage_number, wave_in_stage, waiting_for_stage_start, stage_cooldown_timer, next_windmill_cost
 
     # Init generation
     castle_c = max(0, COLUMNS - CASTLE_HITBOX_WIDTH_TILES - 3)
@@ -550,7 +580,6 @@ async def main():
                 llamas.append(Llama((start_r, start_c), TILE_SIZE, grid, walkable_coords, llamas))
         
     def spawn_enemy_wave(count=10):
-        # Spawn from Left Side (Column 0)
         spawn_candidates = []
         for r in range(ROWS):
             if grid[r][0] == "grass":
@@ -575,44 +604,50 @@ async def main():
         
         # --- Game Flow Logic ---
         if not game_over:
-            # 1. Pause Logic (Continue Screen)
-            if waiting_for_continue:
-                continue_timer -= dt
-                if continue_timer <= 0:
-                    waiting_for_continue = False
+            # 1. Stage Break
+            if waiting_for_stage_start:
+                stage_cooldown_timer -= dt
+                if stage_cooldown_timer <= 0:
+                    waiting_for_stage_start = False
                     enemies_attacking = False
-                    # Start Next Wave
-                    wave_number += 1
-                    current_wave_duration *= 0.5 # Reduce time by 50%
+                    
+                    # Start Next Stage
+                    stage_number += 1
+                    wave_in_stage = 1
+                    current_wave_duration = INITIAL_WAVE_TIMER * (0.9 ** (stage_number - 1)) # Slightly faster each stage
                     game_timer = current_wave_duration
-                    print(f"Starting Wave {wave_number}. Timer: {game_timer:.2f}s")
+                    print(f"Starting Stage {stage_number}, Wave 1")
 
-            # 2. Timer Logic
+            # 2. Timer Logic (Wait for attack)
             elif not enemies_attacking:
                 game_timer -= dt
                 if game_timer <= 0:
                     game_timer = 0
                     enemies_attacking = True
-                    # Increase wave size slightly each wave
-                    spawn_enemy_wave(10 + (wave_number * 2))
+                    
+                    # Calculate Wave Size: Base 10 + scaling
+                    wave_size = 10 + (stage_number * 5) + (wave_in_stage * 2)
+                    spawn_enemy_wave(int(wave_size))
 
-            # 3. Check for Wave Clear
+            # 3. Combat/Wave Clear Logic
             elif enemies_attacking:
                 if len(enemies) == 0:
                     # Wave Cleared
-                    print("Wave Cleared!")
+                    print(f"Wave {wave_in_stage} Cleared!")
                     enemies_attacking = False
                     
-                    # Every 5 waves, do pause
-                    if wave_number % 5 == 0:
-                        waiting_for_continue = True
-                        continue_timer = 5.0
+                    wave_in_stage += 1
+                    if wave_in_stage > 5:
+                        # Stage Cleared
+                        waiting_for_stage_start = True
+                        stage_cooldown_timer = STAGE_COOLDOWN_TIME
+                        print("Stage Cleared!")
                     else:
-                        # Proceed immediately to timer logic
-                        wave_number += 1
+                        # Next Wave in same stage
+                        # Reduce timer by 50% for next wave in same stage
                         current_wave_duration *= 0.5
                         game_timer = current_wave_duration
-                        print(f"Starting Wave {wave_number}. Timer: {game_timer:.2f}s")
+                        print(f"Next wave in {game_timer:.2f}s")
 
             if castle and castle.health <= 0:
                 game_over = True
@@ -643,10 +678,10 @@ async def main():
             elif event.type == pygame.KEYDOWN: 
                 if event.key == pygame.K_r: # Regenerate / Restart
                     print("\nRegenerating map...")
-                    # RESET CHEESE TO 0 as requested explicitly
-                    cheese_count = 0
+                    # Reset Game State
+                    cheese_count = 5 # Reset to default 5
+                    next_windmill_cost = 0 # Reset cost
                     
-                    # Reset Objects
                     player_placed_objects = [] 
                     windmills = [] 
                     llamas = [] 
@@ -660,14 +695,16 @@ async def main():
                     delete_button_rect = None 
                     selected_llama_context = None
                     repair_button_rect = None
+                    active_formation = "none" 
                     
-                    # Reset Wave State
+                    # Reset Wave/Stage State
                     game_timer = INITIAL_WAVE_TIMER
                     current_wave_duration = INITIAL_WAVE_TIMER
-                    wave_number = 1
+                    stage_number = 1
+                    wave_in_stage = 1
                     enemies_attacking = False
                     game_over = False
-                    waiting_for_continue = False
+                    waiting_for_stage_start = False
                     
                     castle_c = max(0, COLUMNS - CASTLE_HITBOX_WIDTH_TILES - 3)
                     max_r = max(CASTLE_HITBOX_HEIGHT_TILES, ROWS - CASTLE_HITBOX_HEIGHT_TILES - 2)
@@ -700,7 +737,7 @@ async def main():
                         if selected_entity:
                             selected_entity.selected = False
                             selected_entity = None
-                        selected_units = [] # Clear multi-selection
+                        selected_units = [] 
                         for u in mcuncles + hamsters: u.selected = False
                         
                         ui_control_panel.build_menu_active = False 
@@ -722,7 +759,6 @@ async def main():
                         selected_asset_type = ui_data 
                         selected_removable_object = None
                         delete_button_rect = None
-                        # Deselect units
                         for u in selected_units: u.selected = False
                         selected_units = []
                     
@@ -738,7 +774,6 @@ async def main():
 
                     elif ui_action == "set_rally_point":
                         current_tool = "set_rally"
-                        # Deselect units
                         for u in selected_units: u.selected = False
                         selected_units = []
                         
@@ -759,7 +794,6 @@ async def main():
                             ui_control_panel.llama_menu_active = False
                     
                     elif ui_action == "select_all_type":
-                        # Select all units of this type
                         target_type = ui_data
                         keys = pygame.key.get_pressed()
                         shift_held = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
@@ -798,12 +832,15 @@ async def main():
                     if selected_units:
                         world_x, world_y = _screen_to_world_pixel(mouse_screen_x, mouse_screen_y)
                         
-                        positions = get_formation_positions((world_x, world_y), len(selected_units), active_formation)
-                        
-                        for i, unit in enumerate(selected_units):
-                            if i < len(positions):
-                                tx, ty = positions[i]
-                                unit.set_precise_target(tx, ty)
+                        if active_formation == "none":
+                            for u in selected_units:
+                                u.set_precise_target(world_x, world_y)
+                        else:
+                            positions = get_formation_positions((world_x, world_y), len(selected_units), active_formation)
+                            for i, unit in enumerate(selected_units):
+                                if i < len(positions):
+                                    tx, ty = positions[i]
+                                    unit.set_precise_target(tx, ty)
                         continue
 
                     # If no units selected, Right Click Deselects UI/Tools
@@ -873,8 +910,18 @@ async def main():
 
                             if is_spot_free:
                                 if selected_asset_type == "windmill":
-                                    new_w = Windmill((grid_r_click, grid_c_click), TILE_SIZE)
-                                    windmills.append(new_w)
+                                    # Cost Check
+                                    cost = next_windmill_cost
+                                    if cheese_count >= cost:
+                                        new_w = Windmill((grid_r_click, grid_c_click), TILE_SIZE)
+                                        windmills.append(new_w)
+                                        cheese_count -= cost
+                                        
+                                        # Increase next cost (0 -> 5 -> 10 ...)
+                                        if next_windmill_cost == 0: next_windmill_cost = 5
+                                        else: next_windmill_cost += 5
+                                    else:
+                                        print("Not enough cheese for windmill!")
                                 else:
                                     player_placed_objects.append((selected_asset_type, grid_r_click, grid_c_click)) 
                             else:
@@ -888,7 +935,6 @@ async def main():
                         ui_control_panel.castle_menu_active = True
                         ui_control_panel.llama_menu_active = False
                         selected_llama_context = None
-                        # Deselect units
                         for u in selected_units: u.selected = False
                         selected_units = []
                         continue
@@ -926,10 +972,8 @@ async def main():
                     clicked_unit = None
                     all_units = mcuncles + hamsters
                     for unit in all_units:
-                        # Simple screen-space hitbox check for precise click
                         ux = unit.current_pixel_pos.x
                         uy = unit.current_pixel_pos.y
-                        # Check in world coords
                         if ux <= world_x_click <= ux + TILE_SIZE and uy <= world_y_click <= uy + TILE_SIZE:
                             clicked_unit = unit
                             break
@@ -939,7 +983,6 @@ async def main():
                         shift_held = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
                         
                         if not shift_held:
-                            # If picking new unit, clear others
                             for u in selected_units: u.selected = False
                             selected_units = []
                         
@@ -947,16 +990,12 @@ async def main():
                             clicked_unit.selected = True
                             selected_units.append(clicked_unit)
                         elif shift_held:
-                            # Toggle off with shift
                             clicked_unit.selected = False
                             selected_units.remove(clicked_unit)
                         
                         continue
 
-                    # 5. Empty Ground Click -> Move OR Drag
-                    # We changed movement to Right Click. 
-                    # Left Click on Empty Ground = Start Drag Selection.
-                    
+                    # 5. Empty Ground Click -> Drag Selection
                     selection_drag_start = event.pos
                     selected_removable_object = None
                     delete_button_rect = None
@@ -972,7 +1011,6 @@ async def main():
                     w = abs(drag_end[0] - selection_drag_start[0])
                     h = abs(drag_end[1] - selection_drag_start[1])
                     
-                    # If box is big enough, select units inside
                     if w > 5 and h > 5:
                         selection_rect = pygame.Rect(x1, y1, w, h)
                         keys = pygame.key.get_pressed()
@@ -993,7 +1031,6 @@ async def main():
                                     unit.selected = True
                                     selected_units.append(unit)
                     else:
-                        # Just a click on ground - Deselect if not shift?
                         keys = pygame.key.get_pressed()
                         shift_held = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
                         if not shift_held:
