@@ -6,12 +6,12 @@ from collections import deque
 # --- Configuration for non-pathway assets ---
 ASSET_FILES = {
     "grass": ("MainGrass.png", ""),  
-    # "tree", "rock", "bonus" removed as requested
     "sand": ("sand.png", ""),
     "fence": ("Fence.png", "Assets"), 
     "flagpole": ("FlagPole.png", "Assets"),
     "alfalfa": ("alfalfa.png", "tiles"), 
     "cheese": ("cheese.png", "tiles"), 
+    "wrench": ("wrench.png", "Assets"), # New Wrench Icon
 }
 
 # --- Configuration for Llama assets ---
@@ -185,8 +185,9 @@ def load_game_assets(tile_size, screen_width, screen_height, search_folders):
             img = pygame.image.load(path).convert_alpha()
             _loaded_assets[name] = pygame.transform.scale(img, (tile_size, tile_size))
         except FileNotFoundError as e:
-            print(f"CRITICAL ERROR in Assets.py: {e}")
-            raise 
+            # It's possible wrench doesn't exist yet, we don't want to crash hard if it's just one feature
+            print(f"Warning in Assets.py: {e}")
+            # raise # Commented out raise to allow running even if wrench is missing (it will just be None)
         except Exception as e:
             print(f"An unexpected error occurred loading feature tile '{asset_filename}': {e}")
             raise 

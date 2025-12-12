@@ -11,11 +11,12 @@ UNIT_DAMAGE = {
     "TheHamster": 30
 }
 
-# Llama Eating Duration on Alfalfa (Min, Max seconds)
-LLAMA_EATING_DURATION_ALFALFA = (100.0, 100.0) 
+# Bob's Windmill Boost (0.5 = 50% per Bob)
+BOB_BOOST_PER_UNIT = 0.5
 
-# Bob's Windmill Boost (1.5 = 50% faster)
-BOB_PRODUCTION_MULTIPLIER = 1.5 
+# Unit Collision/Separation Settings
+SEPARATION_RADIUS = 30.0
+SEPARATION_FORCE = 200.0
 
 # --- Global Castle Settings ---
 CASTLE_HITBOX_WIDTH_TILES = 4
@@ -40,10 +41,7 @@ class Projectile:
         self.pos = pygame.Vector2(start_pos)
         self.target = target 
         self.speed = 8.0
-        
-        # Set damage from global config, default to 10 if name not found
         self.damage = UNIT_DAMAGE.get(shooter_name, 10)
-        
         self.active = True
         self.image = None
         key = None
@@ -119,119 +117,148 @@ class Windmill:
         # Cheese Logic
         self.cheese_timer = 0.0
         self.CHEESE_GENERATION_TIME = 10.0
-        self.is_active = False # True if a llama is eating on alfalfa
         
+        self.static_llamas = [] 
+        self._init_static_llamas()
+
+    def _init_static_llamas(self):
+        # We want llamas STRICTLY on the generated alfalfa tiles
+        frames = []
+        if "eat" in Assets._loaded_llama_sprites and "south" in Assets._loaded_llama_sprites["eat"]:
+            frames = Assets._loaded_llama_sprites["eat"]["south"]
+        if not frames: return
+
+        # Get valid alfalfa grid coordinates
+        alfalfa_coords = self.get_alfalfa_coords()
+        
+        # Pick 4 specific tiles for the llamas to ensure they are ON the alfalfa
+        # We can pick 4 distinct indices
+        if len(alfalfa_coords) >= 4:
+            # Pick Top, Right, Bottom, Left roughly
+            # Sort by row then col
+            alfalfa_coords.sort()
+            
+            # Select specific indices that usually correspond to the middle of the sides
+            # Top row is first few, Bottom row is last few
+            # This is a simple heuristic selection
+            selected_coords = [
+                alfalfa_coords[1], # Top
+                alfalfa_coords[len(alfalfa_coords)//2 - 1], # Left
+                alfalfa_coords[len(alfalfa_coords)//2 + 2], # Right
+                alfalfa_coords[-2] # Bottom
+            ]
+        else:
+            selected_coords = alfalfa_coords[:4]
+
+        for r, c in selected_coords:
+            # Convert grid to exact pixel position (centered on tile)
+            # Subtract some offset to center the llama sprite (assuming sprite is approx tile size)
+            # Llama sprite is scaled 1.5x tile size, so we center it
+            sprite_w = self.tile_size * Assets.LLAMA_SCALE_FACTOR
+            offset_x = (self.tile_size - sprite_w) / 2
+            offset_y = (self.tile_size - sprite_w) / 2 # Slightly higher
+
+            px = c * self.tile_size + offset_x
+            py = r * self.tile_size + offset_y
+            
+            start_frame = random.randint(0, len(frames) - 1)
+            
+            self.static_llamas.append({
+                'frames': frames,
+                'x': px,
+                'y': py,
+                'frame_idx': float(start_frame)
+            })
+
     def get_alfalfa_coords(self):
-        """Returns the grid coordinates of the alfalfa border."""
         coords = []
         for dr in range(-1, self.height_tiles + 1):
             for dc in range(-1, self.width_tiles + 1):
                 if 0 <= dr < self.height_tiles and 0 <= dc < self.width_tiles:
-                    continue # Skip center
+                    continue 
                 coords.append((self.grid_r + dr, self.grid_c + dc))
         return coords
 
-    def assign_llamas(self, llamas):
-        """
-        Assigns up to 4 llamas to the 4 sides of the windmill (Top, Right, Bottom, Left).
-        """
-        # Calculate zones (including corners in the strip of 4)
-        top_zone = [(self.grid_r - 1, self.grid_c + i) for i in range(-1, 3)]
-        right_zone = [(self.grid_r + i, self.grid_c + 2) for i in range(-1, 3)]
-        bottom_zone = [(self.grid_r + 2, self.grid_c + i) for i in range(-1, 3)]
-        left_zone = [(self.grid_r + i, self.grid_c - 1) for i in range(-1, 3)]
-
-        zones = [top_zone, right_zone, bottom_zone, left_zone]
-        
-        assigned_count = 0
-        for i, llama in enumerate(llamas):
-            if i < len(zones):
-                zone_coords = zones[i]
-                llama.assign_zone(zone_coords)
-                assigned_count += 1
-                print(f"Windmill: Assigned Llama {i} to a side.")
-            else:
-                break
-        return assigned_count
-
-    def update(self, dt, llamas=[], bob_present=False):
-        # Check if any llama is eating on the alfalfa tiles
-        alfalfa_tiles = set(self.get_alfalfa_coords())
-        llama_eating_here = False
-        
-        for llama in llamas:
-            if llama.state == "eat":
-                if (llama.grid_r, llama.grid_c) in alfalfa_tiles:
-                    llama_eating_here = True
-                    break
-        
-        self.is_active = llama_eating_here
-        cheese_produced = 0
-
-        if self.is_active:
-            # Animation
-            self.animation_timer += dt
-            if self.animation_timer >= self.animation_speed:
-                if self.sprites:
-                    self.animation_frame = (self.animation_frame + 1) % len(self.sprites)
-                self.animation_timer = 0.0
+    def update(self, dt, hamsters=[]):
+        # Animation
+        self.animation_timer += dt
+        if self.animation_timer >= self.animation_speed:
+            if self.sprites:
+                self.animation_frame = (self.animation_frame + 1) % len(self.sprites)
+            self.animation_timer = 0.0
             
-            # Cheese Production
-            # Use Global Boost Multiplier if Bob is present
-            time_increment = dt
-            if bob_present:
-                time_increment = dt * BOB_PRODUCTION_MULTIPLIER
-                
-            self.cheese_timer += time_increment
-            if self.cheese_timer >= self.CHEESE_GENERATION_TIME:
-                self.cheese_timer = 0.0
-                cheese_produced = 1
-        else:
-            # Reset/Stop Animation
-            self.animation_frame = 0
+        # Llama Animations
+        llama_anim_speed = 8.0 * dt 
+        for llama in self.static_llamas:
+            llama['frame_idx'] += llama_anim_speed
+            if llama['frame_idx'] >= len(llama['frames']):
+                llama['frame_idx'] = 0
+        
+        # Calculate Bob Boost (Additive)
+        center = self.current_pixel_pos + pygame.Vector2(self.tile_size, self.tile_size)
+        boost_multiplier = 1.0
+        
+        for h in hamsters:
+            if h.name == "Bob":
+                h_center = h.current_pixel_pos + pygame.Vector2(self.tile_size/2, self.tile_size/2)
+                if center.distance_to(h_center) < 150: 
+                    boost_multiplier += BOB_BOOST_PER_UNIT
+
+        # Cheese Production
+        time_increment = dt * boost_multiplier
+        self.cheese_timer += time_increment
+        cheese_produced = 0
+        if self.cheese_timer >= self.CHEESE_GENERATION_TIME:
+            self.cheese_timer = 0.0
+            cheese_produced = 1
             
         return cheese_produced
 
     def get_progress(self):
-        """Returns a float 0.0 to 1.0 representing cheese generation progress."""
         return min(1.0, self.cheese_timer / self.CHEESE_GENERATION_TIME)
 
     def draw(self, screen):
+        # Alfalfa
         if self.alfalfa_sprite:
             for r, c in self.get_alfalfa_coords():
                 draw_x = c * self.tile_size
                 draw_y = r * self.tile_size
                 screen.blit(self.alfalfa_sprite, (draw_x, draw_y))
 
+        # Static Llamas (Behind/Around Windmill logic needed? 
+        # Drawing them before windmill puts them behind if overlapping top, 
+        # but in front for bottom. Z-sorting is complex, simple draw order here:
+        # Alfalfa -> Llamas -> Windmill (covers top llamas) -> Progress
+        
+        # Sort llamas by Y to fake depth?
+        # self.static_llamas.sort(key=lambda l: l['y']) # Optional
+        
+        for llama in self.static_llamas:
+            frames = llama['frames']
+            idx = int(llama['frame_idx']) % len(frames)
+            img = frames[idx]
+            screen.blit(img, (llama['x'], llama['y']))
+
         if self.sprites:
             sprite = self.sprites[self.animation_frame]
             screen.blit(sprite, (self.current_pixel_pos.x, self.current_pixel_pos.y))
         
-        # Draw Progress Bar if active
-        if self.is_active:
-            bar_w = self.width_tiles * self.tile_size
-            bar_h = 8
-            x = self.current_pixel_pos.x
-            y = self.current_pixel_pos.y - 12
-            
-            progress = self.get_progress()
-            
-            # Background
-            pygame.draw.rect(screen, (50, 50, 50), (x, y, bar_w, bar_h))
-            # Fill
-            pygame.draw.rect(screen, (255, 215, 0), (x, y, bar_w * progress, bar_h)) # Gold color
-            # Border
-            pygame.draw.rect(screen, (255, 255, 255), (x, y, bar_w, bar_h), 1)
+        # Progress Bar
+        bar_w = self.width_tiles * self.tile_size
+        bar_h = 8
+        x = self.current_pixel_pos.x
+        y = self.current_pixel_pos.y - 12
+        progress = self.get_progress()
+        pygame.draw.rect(screen, (50, 50, 50), (x, y, bar_w, bar_h))
+        pygame.draw.rect(screen, (255, 215, 0), (x, y, bar_w * progress, bar_h))
+        pygame.draw.rect(screen, (255, 255, 255), (x, y, bar_w, bar_h), 1)
 
     def is_pixel_clicked(self, world_pos):
         if not self.sprites or not self.masks: return False
-        
         local_x = int(world_pos[0] - self.current_pixel_pos.x)
         local_y = int(world_pos[1] - self.current_pixel_pos.y)
-        
         current_mask = self.masks[self.animation_frame]
         width, height = current_mask.get_size()
-        
         if 0 <= local_x < width and 0 <= local_y < height:
             return current_mask.get_at((local_x, local_y))
         return False
@@ -302,10 +329,8 @@ class Castle:
     def queue_unit(self, unit_name):
         if len(self.training_queue) < self.max_queue_size:
             self.training_queue.append(unit_name)
-            print(f"Castle: Added {unit_name} to queue.")
             return True
         else:
-            print("Castle: Queue full.")
             return False
 
     def set_rally_point(self, grid_r, grid_c):
@@ -315,6 +340,14 @@ class Castle:
     def take_damage(self, amount):
         self.health -= amount
         if self.health < 0: self.health = 0
+
+    def get_repair_cost(self):
+        pct = self.health / self.max_health
+        if pct < 0.5: return 20
+        else: return 10
+
+    def repair(self):
+        self.health = self.max_health
 
     def update(self, dt):
         if self.training_queue:
@@ -342,7 +375,6 @@ class Castle:
             rr, rc = self.rally_point
             new_unit.set_target(rr, rc)
             self.spawned_units.append(new_unit)
-            print(f"Castle: Spawned {name}.")
 
     def draw(self, screen):
         if self.sprites:
@@ -355,15 +387,17 @@ class Castle:
             pygame.draw.rect(screen, CASTLE_BORDER_COLOR, rect, 2)
         if self.flagpole: self.flagpole.draw(screen)
         
-        # Draw Health Bar
         bar_width = self.tile_size * self.width_tiles
         bar_height = 8
-        hx = self.current_pixel_pos.x
-        hy = self.current_pixel_pos.y - 25
-        hp_pct = max(0, self.health / self.max_health)
-        pygame.draw.rect(screen, (50, 0, 0), (hx, hy, bar_width, bar_height))
-        pygame.draw.rect(screen, (0, 255, 0), (hx, hy, bar_width * hp_pct, bar_height))
-        pygame.draw.rect(screen, (255, 255, 255), (hx, hy, bar_width, bar_height), 1)
+        
+        # Draw Health Bar ONLY if damaged
+        if self.health < self.max_health:
+            hx = self.current_pixel_pos.x
+            hy = self.current_pixel_pos.y - 25
+            hp_pct = max(0, self.health / self.max_health)
+            pygame.draw.rect(screen, (50, 0, 0), (hx, hy, bar_width, bar_height))
+            pygame.draw.rect(screen, (0, 255, 0), (hx, hy, bar_width * hp_pct, bar_height))
+            pygame.draw.rect(screen, (255, 255, 255), (hx, hy, bar_width, bar_height), 1)
 
         # Draw Training Progress
         if self.training_queue:
@@ -414,7 +448,6 @@ class Enemy:
             self.animation_timer = 0.0
 
         if move_to_castle and castle and self.health > 0:
-            # Move Logic
             target_center = castle.current_pixel_pos + pygame.Vector2(
                 (castle.width_tiles * castle.tile_size) / 2,
                 (castle.height_tiles * castle.tile_size) / 2
@@ -424,8 +457,7 @@ class Enemy:
             direction = target_center - my_center
             dist = direction.length()
             
-            # Simple Attack Range
-            if dist < 100: # Close enough to hit castle
+            if dist < 100: 
                 self.attack_timer += dt
                 if self.attack_timer >= self.attack_cooldown:
                     self.attack_timer = 0.0
@@ -457,7 +489,6 @@ class Enemy:
 class Llama:
     def __init__(self, start_grid_pos, tile_size, game_grid, llama_walkable_coords, all_llamas_ref):
         self.grid_r, self.grid_c = start_grid_pos
-        self.target_grid_r, self.target_grid_c = start_grid_pos 
         self.tile_size = tile_size
         self.game_grid = game_grid 
         self.llama_walkable_coords = set(llama_walkable_coords) 
@@ -482,9 +513,7 @@ class Llama:
         self._generate_masks()
         self.target_unit = None 
         
-        # New: Zone assignment
-        self.assigned_zone = None # Set of (r, c) tuples
-        
+        self.assigned_zone = None 
         self._choose_next_action() 
 
     def _generate_masks(self):
@@ -497,12 +526,10 @@ class Llama:
                 self.masks[state][d] = mask_list
                 
     def assign_zone(self, zone_coords):
-        """Sets a specific area where the llama must stay."""
         self.assigned_zone = set(zone_coords)
-        # Immediately attempt to move towards the zone
         self.state = "walk"
-        self.state_duration = 20.0 # Give it plenty of time to get there
-        self.target_unit = None # Stop following if assigned to farm
+        self.state_duration = 20.0 
+        self.target_unit = None
 
     def is_pixel_clicked(self, world_pos):
         current_state = self.state
@@ -544,20 +571,12 @@ class Llama:
         directions_and_names = [(0, 1, "east"), (0, -1, "west"), (1, 0, "south"), (-1, 0, "north")]
         random.shuffle(directions_and_names) 
 
-        # --- Zone Logic ---
-        # If we have an assigned zone, we MUST move there.
-        # If we are already in the zone, we only move to other tiles within the zone.
-        # If we are outside the zone, we pathfind towards it.
         target_coords = None
         
         if self.assigned_zone:
-            # Check if currently inside zone
             if (self.grid_r, self.grid_c) in self.assigned_zone:
-                # We are in the zone. Target is any other tile in the zone.
-                # Just wander within the zone.
                 pass
             else:
-                # We are outside. Find closest tile in zone.
                 min_dist = float('inf')
                 closest_tile = None
                 for zr, zc in self.assigned_zone:
@@ -566,26 +585,6 @@ class Llama:
                         min_dist = dist
                         closest_tile = (zr, zc)
                 target_coords = closest_tile
-        else:
-            # Legacy Alfalfa Targeting (if not specifically assigned a zone but windmills exist)
-            alfalfa_targets = set()
-            for w in windmills:
-                alfalfa_targets.update(w.get_alfalfa_coords())
-            
-            if alfalfa_targets:
-                # Find closest alfalfa tile
-                min_dist = float('inf')
-                closest_tile = None
-                
-                if (self.grid_r, self.grid_c) in alfalfa_targets:
-                    pass 
-                else:
-                    for tr, tc in alfalfa_targets:
-                        dist = abs(self.grid_r - tr) + abs(self.grid_c - tc)
-                        if dist < min_dist:
-                            min_dist = dist
-                            closest_tile = (tr, tc)
-                    target_coords = closest_tile
 
         best_move = None
         min_target_dist = float('inf')
@@ -593,17 +592,11 @@ class Llama:
         for dr, dc, direction_name in directions_and_names:
             nr, nc = self.grid_r + dr, self.grid_c + dc
             
-            # 1. Map Boundaries & Walkability
-            # If strictly assigned a zone and we are already in it, restrict moves to zone ONLY.
             if self.assigned_zone and (self.grid_r, self.grid_c) in self.assigned_zone:
                 if (nr, nc) not in self.assigned_zone:
                     continue
 
-            # Standard checks
             if (nr, nc) not in self.llama_walkable_coords: 
-                # If assigned zone includes non-grass coords (e.g. edge of map or overlapping object?), 
-                # we usually trust llama_walkable_coords.
-                # However, alfalfa might be placed on grass that IS walkable.
                 continue 
             
             if (nr, nc) in obstacles: continue
@@ -624,34 +617,22 @@ class Llama:
                     break
             if is_obstructed: continue
             
-            # Valid move found. 
             if target_coords:
-                # Greedy Pathfinding
                 dist_to_target = abs(nr - target_coords[0]) + abs(nc - target_coords[1])
-                
-                # If already in zone/alfalfa, just collect valid moves to wander
                 current_is_target = False
                 if self.assigned_zone and (self.grid_r, self.grid_c) in self.assigned_zone:
                     current_is_target = True
-                elif not self.assigned_zone and (self.grid_r, self.grid_c) in alfalfa_targets: # legacy check
-                     current_is_target = True
 
                 if current_is_target:
                     possible_moves.append(((nr, nc), direction_name))
                 else:
-                    # Not at target, pick best step towards it
                     if dist_to_target < min_target_dist:
                         min_target_dist = dist_to_target
                         best_move = ((nr, nc), direction_name)
-                    elif dist_to_target == min_target_dist:
-                        # Tie breaker 
-                        pass 
             else:
-                # Random walking
                 possible_moves.append(((nr, nc), direction_name))
         
         if target_coords:
-            # If we are effectively "at target" (in zone), pick random move from valid ones
             at_target = False
             if self.assigned_zone:
                  if (self.grid_r, self.grid_c) in self.assigned_zone: at_target = True
@@ -661,7 +642,6 @@ class Llama:
                 return None, None
             else:
                 if best_move: return best_move
-                # Fallback if path blocked locally
                 if possible_moves: return random.choice(possible_moves)
         
         if possible_moves: return random.choice(possible_moves)
@@ -670,27 +650,18 @@ class Llama:
     def _choose_next_action(self, obstacles=set(), pixel_obstacles=[], windmills=[]):
         if self.target_unit: return 
         
-        # Check if currently on Alfalfa or Zone
         on_alfalfa_or_zone = False
         if self.assigned_zone:
             if (self.grid_r, self.grid_c) in self.assigned_zone:
                 on_alfalfa_or_zone = True
-        else:
-            for w in windmills:
-                if (self.grid_r, self.grid_c) in w.get_alfalfa_coords():
-                    on_alfalfa_or_zone = True
-                    break
-
+        
         next_grid_pos, new_direction = self._find_next_walk_target(obstacles, pixel_obstacles, windmills) 
         
         should_walk = False
         if next_grid_pos is not None:
             if self.assigned_zone and not on_alfalfa_or_zone:
-                should_walk = True # Must walk to get to zone
-            elif windmills and not on_alfalfa_or_zone and not self.assigned_zone:
-                should_walk = True # Seek food
+                should_walk = True 
             elif on_alfalfa_or_zone:
-                # If in zone, move sometimes (to simulate moving to next tile)
                 if random.random() < 0.7: 
                     should_walk = True
             elif random.random() < 0.6:
@@ -700,7 +671,7 @@ class Llama:
             self.state = "walk"
             self.state_duration = random.uniform(2, 6)
             if self.assigned_zone and not on_alfalfa_or_zone:
-                 self.state_duration = 10.0 # Give time to travel
+                 self.state_duration = 10.0 
                  
             self.target_grid_r, self.target_grid_c = next_grid_pos
             llama_render_size = int(self.tile_size * Assets.LLAMA_SCALE_FACTOR)
@@ -713,7 +684,7 @@ class Llama:
             self.state = "idle" 
             self.state_duration = random.uniform(1, 4)
             if on_alfalfa_or_zone:
-                 self.state_duration = 0.5 # Idle briefly before eating again
+                 self.state_duration = 0.5 
             
             self.animation_frame = 0 
             self.animation_timer = 0.0 
@@ -729,23 +700,13 @@ class Llama:
         if self.target_unit: return 
         self.state = "eat"
         
-        # Longer eating if on alfalfa/zone
         on_alfalfa = False
         if self.assigned_zone:
              if (self.grid_r, self.grid_c) in self.assigned_zone:
                  on_alfalfa = True
-        else:
-            for w in windmills:
-                if (self.grid_r, self.grid_c) in w.get_alfalfa_coords():
-                    on_alfalfa = True
-                    break
         
         if on_alfalfa:
-            # Use global config for eating duration on alfalfa
-            self.state_duration = random.uniform(
-                Assets.LLAMA_EATING_DURATION_ALFALFA[0] if hasattr(Assets, 'LLAMA_EATING_DURATION_ALFALFA') else LLAMA_EATING_DURATION_ALFALFA[0],
-                Assets.LLAMA_EATING_DURATION_ALFALFA[1] if hasattr(Assets, 'LLAMA_EATING_DURATION_ALFALFA') else LLAMA_EATING_DURATION_ALFALFA[1]
-            )
+            self.state_duration = 100.0 
         else:
             self.state_duration = random.uniform(3, 7)
             
@@ -861,56 +822,80 @@ class McUncle:
         self.attack_range = 250
         self.attack_cooldown = 1.0 
         self.cooldown_timer = 0.0
+        self.radius = 25 # collision radius
         
     def set_target(self, grid_r, grid_c):
         self.target_pixel_pos = pygame.Vector2(grid_c * self.tile_size, grid_r * self.tile_size)
         self.is_moving = True
 
-    def update(self, dt, enemies_list=None, projectiles_list=None, obstacles=set(), pixel_obstacles=[]):
+    def set_precise_target(self, x, y):
+        self.target_pixel_pos = pygame.Vector2(x, y)
+        self.is_moving = True
+
+    def update(self, dt, enemies_list=None, projectiles_list=None, obstacles=set(), pixel_obstacles=[], friends=[]):
         self.animation_timer += dt
         if self.animation_timer >= self.animation_speed:
             if self.sprites:
                 self.animation_frame = (self.animation_frame + 1) % len(self.sprites)
             self.animation_timer = 0.0
             
+        # Movement & Collision
         if self.is_moving:
             direction = self.target_pixel_pos - self.current_pixel_pos
             distance = direction.length()
-            if distance == 0:
+            
+            # Arrived check
+            if distance < 5:
                 self.is_moving = False
-                return
-
-            if direction.x < 0: self.facing_right = False
-            elif direction.x > 0: self.facing_right = True
-            
-            move_dir = direction.normalize()
-            next_pos = self.current_pixel_pos + move_dir * self.speed
-            center_x = next_pos.x + self.tile_size/2
-            center_y = next_pos.y + self.tile_size/2
-            next_c = int(center_x // self.tile_size)
-            next_r = int(center_y // self.tile_size)
-            
-            blocked = False
-            if (next_r, next_c) in obstacles:
-                blocked = True
-            
-            if not blocked:
+                self.current_pixel_pos = self.target_pixel_pos
+            else:
+                if direction.x < 0: self.facing_right = False
+                elif direction.x > 0: self.facing_right = True
+                
+                move_vec = direction.normalize() * self.speed
+                
+                # Separation Force
+                sep_vec = pygame.Vector2(0, 0)
+                for f in friends:
+                    if f is not self:
+                        dist = self.current_pixel_pos.distance_to(f.current_pixel_pos)
+                        if dist < SEPARATION_RADIUS and dist > 0:
+                            diff = self.current_pixel_pos - f.current_pixel_pos
+                            sep_vec += diff.normalize() * (SEPARATION_FORCE / dist)
+                
+                # Apply movement + separation (scaled by dt handled in main loop tick really, but here speed is pixels/frame approx in original code logic, or needs dt)
+                # Original code used speed as pixels per update roughly. Let's stick to simple addition.
+                
+                # Check next pos validity
+                next_pos = self.current_pixel_pos + move_vec + (sep_vec * 0.05) # Small separation factor
+                
+                center_x = next_pos.x + self.tile_size/2
+                center_y = next_pos.y + self.tile_size/2
+                
+                # Simple obstacle check
+                blocked = False
                 for obj in pixel_obstacles:
                     if obj and obj.check_collision((center_x, center_y)):
                         blocked = True
                         break
+                
+                if not blocked:
+                    self.current_pixel_pos = next_pos
+                    self.grid_c = int(self.current_pixel_pos.x // self.tile_size)
+                    self.grid_r = int(self.current_pixel_pos.y // self.tile_size)
 
-            if blocked:
-                self.is_moving = False
-            elif distance < self.speed:
-                self.current_pixel_pos = self.target_pixel_pos
-                self.is_moving = False
-                self.grid_c = int(self.current_pixel_pos.x // self.tile_size)
-                self.grid_r = int(self.current_pixel_pos.y // self.tile_size)
-            else:
-                self.current_pixel_pos = next_pos
-                self.grid_c = int(self.current_pixel_pos.x // self.tile_size)
-                self.grid_r = int(self.current_pixel_pos.y // self.tile_size)
+        else:
+            # Idle separation to stop stacking when stopped
+            sep_vec = pygame.Vector2(0, 0)
+            for f in friends:
+                if f is not self:
+                    dist = self.current_pixel_pos.distance_to(f.current_pixel_pos)
+                    if dist < SEPARATION_RADIUS and dist > 0:
+                        diff = self.current_pixel_pos - f.current_pixel_pos
+                        sep_vec += diff.normalize() * (SEPARATION_FORCE / dist)
+            
+            if sep_vec.length() > 0.1:
+                self.current_pixel_pos += sep_vec * 0.05
 
         if self.cooldown_timer > 0:
             self.cooldown_timer -= dt
@@ -963,6 +948,7 @@ class Hamster:
         self.attack_range = 250
         self.attack_cooldown = 1.0 
         self.cooldown_timer = 0.0
+        self.radius = 25
 
     def set_target(self, grid_r, grid_c):
         self.target_pixel_pos = pygame.Vector2(grid_c * self.tile_size, grid_r * self.tile_size)
@@ -971,7 +957,12 @@ class Hamster:
         self.animation_frame = 0
         self.animation_timer = 0.0
 
-    def update(self, dt, enemies_list=None, projectiles_list=None, obstacles=set(), pixel_obstacles=[]):
+    def set_precise_target(self, x, y):
+        self.target_pixel_pos = pygame.Vector2(x, y)
+        self.is_moving = True
+        self.state = "walk"
+
+    def update(self, dt, enemies_list=None, projectiles_list=None, obstacles=set(), pixel_obstacles=[], friends=[]):
         self.animation_timer += dt
         if self.animation_timer >= self.animation_speed:
             current_frames = self.sprites.get(self.state, [])
@@ -982,44 +973,52 @@ class Hamster:
         if self.is_moving:
             direction = self.target_pixel_pos - self.current_pixel_pos
             distance = direction.length()
-            if distance == 0:
+            
+            if distance < 5:
                 self.is_moving = False
                 self.state = "idle"
-                return
-
-            if direction.x < 0: self.facing_right = False
-            elif direction.x > 0: self.facing_right = True
-            
-            move_dir = direction.normalize()
-            next_pos = self.current_pixel_pos + move_dir * self.speed
-            center_x = next_pos.x + self.tile_size/2
-            center_y = next_pos.y + self.tile_size/2
-            next_c = int(center_x // self.tile_size)
-            next_r = int(center_y // self.tile_size)
-            
-            blocked = False
-            if (next_r, next_c) in obstacles:
-                blocked = True
-            
-            if not blocked:
+                self.current_pixel_pos = self.target_pixel_pos
+            else:
+                if direction.x < 0: self.facing_right = False
+                elif direction.x > 0: self.facing_right = True
+                
+                move_vec = direction.normalize() * self.speed
+                
+                # Separation
+                sep_vec = pygame.Vector2(0, 0)
+                for f in friends:
+                    if f is not self:
+                        dist = self.current_pixel_pos.distance_to(f.current_pixel_pos)
+                        if dist < SEPARATION_RADIUS and dist > 0:
+                            diff = self.current_pixel_pos - f.current_pixel_pos
+                            sep_vec += diff.normalize() * (SEPARATION_FORCE / dist)
+                
+                next_pos = self.current_pixel_pos + move_vec + (sep_vec * 0.05)
+                center_x = next_pos.x + self.tile_size/2
+                center_y = next_pos.y + self.tile_size/2
+                
+                blocked = False
                 for obj in pixel_obstacles:
                     if obj and obj.check_collision((center_x, center_y)):
                         blocked = True
                         break
 
-            if blocked:
-                self.is_moving = False
-                self.state = "idle"
-            elif distance < self.speed:
-                self.current_pixel_pos = self.target_pixel_pos
-                self.is_moving = False
-                self.state = "idle"
-                self.grid_c = int(self.current_pixel_pos.x // self.tile_size)
-                self.grid_r = int(self.current_pixel_pos.y // self.tile_size)
-            else:
-                self.current_pixel_pos = next_pos
-                self.grid_c = int(self.current_pixel_pos.x // self.tile_size)
-                self.grid_r = int(self.current_pixel_pos.y // self.tile_size)
+                if not blocked:
+                    self.current_pixel_pos = next_pos
+                    self.grid_c = int(self.current_pixel_pos.x // self.tile_size)
+                    self.grid_r = int(self.current_pixel_pos.y // self.tile_size)
+        else:
+            # Idle separation
+            sep_vec = pygame.Vector2(0, 0)
+            for f in friends:
+                if f is not self:
+                    dist = self.current_pixel_pos.distance_to(f.current_pixel_pos)
+                    if dist < SEPARATION_RADIUS and dist > 0:
+                        diff = self.current_pixel_pos - f.current_pixel_pos
+                        sep_vec += diff.normalize() * (SEPARATION_FORCE / dist)
+            
+            if sep_vec.length() > 0.1:
+                self.current_pixel_pos += sep_vec * 0.05
 
         if self.cooldown_timer > 0:
             self.cooldown_timer -= dt

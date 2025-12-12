@@ -3,6 +3,7 @@ import pygame
 import random
 import os
 import sys
+import math # Added for formations
 import Assets 
 from Entities import Llama, McUncle, Hamster, Enemy, Projectile, Castle, Windmill, CASTLE_HITBOX_WIDTH_TILES, CASTLE_HITBOX_HEIGHT_TILES
 import MenuUI 
@@ -14,7 +15,7 @@ COLUMNS = WIDTH // TILE_SIZE
 ROWS = HEIGHT // TILE_SIZE 
 TILES_SEARCH_FOLDERS = ["", "tiles", "assets"] 
 SAVE_FOLDER = "saved_maps"
-GAME_TIMER_DURATION = 300.0 # Seconds before enemies attack
+INITIAL_WAVE_TIMER = 200.0 
 
 # ---------------- PLAYER INTERACTION STATE ----------------
 current_tool = "none" 
@@ -34,13 +35,21 @@ castle = None
 
 # Game State
 cheese_count = 0
-game_timer = GAME_TIMER_DURATION
+game_timer = INITIAL_WAVE_TIMER
+current_wave_duration = INITIAL_WAVE_TIMER
+wave_number = 1
 enemies_attacking = False
 game_over = False
+waiting_for_continue = False
+continue_timer = 5.0
 
-# Unified selection variable
+# Selection Variables
 selected_entity = None 
 selected_llama_context = None
+selection_drag_start = None
+selection_rect = None
+selected_units = [] 
+active_formation = "line" # Default formation
 
 # For selecting and deleting fences
 selected_removable_object = None 
@@ -63,6 +72,9 @@ render_offset_y = 0.0
 is_dragging = False
 last_mouse_pos = None 
 
+# Castle Repair
+repair_button_rect = None
+
 # ------------------------------------------------------------
 
 
@@ -70,7 +82,7 @@ pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Hamster Path Defense")
 font = pygame.font.Font(None, 28)
-timer_font = pygame.font.Font(None, 32) 
+timer_font = pygame.font.Font(None, 32)
 game_over_font = pygame.font.Font(None, 72)
 delete_font = pygame.font.Font(None, 32)
 clock = pygame.time.Clock()
@@ -157,7 +169,6 @@ def load_all_assets():
 
     except FileNotFoundError as e:
         print(f"CRITICAL ERROR: Asset loading failed: {e}")
-        # In asyncio/web context, sys.exit() might not work as expected, but kept for local
         sys.exit(1)
     except Exception as e:
         print(f"An unexpected error occurred during asset loading: {e}")
@@ -172,7 +183,6 @@ except Exception as e:
 # --- Helper: Generates random non-path features ---
 def generate_random_features(grid, rows, columns, exclusion_coords):
     features = []
-    # Logic for Rock and Bonus removed as requested
     return features
 
 # --- Map Generation Helper ---
@@ -198,9 +208,72 @@ def generate_grass_map(rows, columns, extra_exclusions=None):
         "seed": seed
     }
 
+# --- Formation Helper ---
+def get_formation_positions(center_pixel_pos, unit_count, formation_type, spacing=40):
+    positions = []
+    cx, cy = center_pixel_pos
+    
+    if unit_count == 0: return []
+    if unit_count == 1: return [center_pixel_pos]
+
+    if formation_type == "line":
+        # Horizontal line centered on click
+        start_x = cx - ((unit_count - 1) * spacing) / 2
+        for i in range(unit_count):
+            positions.append((start_x + i * spacing, cy))
+            
+    elif formation_type == "double":
+        # Double Line
+        row1_count = math.ceil(unit_count / 2)
+        row2_count = unit_count - row1_count
+        
+        # Row 1
+        start_x1 = cx - ((row1_count - 1) * spacing) / 2
+        y1 = cy - spacing / 2
+        for i in range(row1_count):
+            positions.append((start_x1 + i * spacing, y1))
+            
+        # Row 2
+        start_x2 = cx - ((row2_count - 1) * spacing) / 2
+        y2 = cy + spacing / 2
+        for i in range(row2_count):
+            positions.append((start_x2 + i * spacing, y2))
+            
+    elif formation_type == "square":
+        side = math.ceil(math.sqrt(unit_count))
+        start_x = cx - ((side - 1) * spacing) / 2
+        start_y = cy - ((side - 1) * spacing) / 2
+        
+        idx = 0
+        for r in range(side):
+            for c in range(side):
+                if idx < unit_count:
+                    positions.append((start_x + c * spacing, start_y + r * spacing))
+                    idx += 1
+                    
+    elif formation_type == "circle":
+        # Circumference approx spacing * count
+        circumference = spacing * unit_count
+        radius = circumference / (2 * math.pi)
+        if radius < spacing: radius = spacing
+        
+        for i in range(unit_count):
+            angle = i * (2 * math.pi / unit_count)
+            px = cx + radius * math.cos(angle)
+            py = cy + radius * math.sin(angle)
+            positions.append((px, py))
+            
+    else:
+        # Default blob/point
+        for i in range(unit_count):
+            positions.append((cx, cy))
+            
+    return positions
+
+
 # --- draw ---
 def draw(seed, grid, features, ui_control_panel): 
-    global delete_button_rect 
+    global delete_button_rect, repair_button_rect
 
     world_surface.fill((0,0,0,0)) 
 
@@ -248,18 +321,16 @@ def draw(seed, grid, features, ui_control_panel):
     for proj in projectiles:
         proj.draw(world_surface)
     
+    # Ghosts
     if current_tool == "place" and selected_asset_type:
         mouse_x, mouse_y = pygame.mouse.get_pos()
         world_r, world_c = _screen_to_world_grid(mouse_x, mouse_y) 
-        
         if 0 <= world_r < ROWS and 0 <= world_c < COLUMNS:
             ghost_image = None
             if selected_asset_type == "windmill":
-                if tiles["windmill"]:
-                    ghost_image = tiles["windmill"][0].copy()
-            else:
-                if selected_asset_type in tiles:
-                    ghost_image = tiles[selected_asset_type].copy()
+                if tiles["windmill"]: ghost_image = tiles["windmill"][0].copy()
+            elif selected_asset_type in tiles:
+                ghost_image = tiles[selected_asset_type].copy()
             
             if ghost_image:
                 ghost_image.set_alpha(128) 
@@ -279,12 +350,48 @@ def draw(seed, grid, features, ui_control_panel):
                     offset_y = (TILE_SIZE - ghost_image.get_height()) / 2
                     world_surface.blit(ghost_image, (world_c * TILE_SIZE + offset_x, world_r * TILE_SIZE + offset_y))
 
+    # --- Render World to Screen ---
     scaled_world_width = int(world_width_pixels * zoom_level)
     scaled_world_height = int(world_height_pixels * zoom_level)
-    
     scaled_world = pygame.transform.scale(world_surface, (scaled_world_width, scaled_world_height))
     screen.blit(scaled_world, (render_offset_x - camera_x * zoom_level, render_offset_y - camera_y * zoom_level))
 
+    # --- UI & Overlays (Screen Space) ---
+
+    # Selection Box
+    if selection_rect:
+        pygame.draw.rect(screen, (0, 255, 0), selection_rect, 1)
+        surf = pygame.Surface((selection_rect.width, selection_rect.height), pygame.SRCALPHA)
+        surf.fill((0, 255, 0, 50))
+        screen.blit(surf, (selection_rect.x, selection_rect.y))
+
+    # Repair Wrench Logic
+    repair_button_rect = None
+    if ui_control_panel.castle_menu_active and castle and castle.health < castle.max_health:
+        # If castle menu is active, it means castle is selected. 
+        # Show wrench above castle
+        wrench_img = tiles.get("wrench")
+        if wrench_img:
+            # Position relative to castle on screen
+            cx, cy = _world_to_screen_pixel(castle.current_pixel_pos.x, castle.current_pixel_pos.y)
+            w_size = 64
+            # Scale if needed
+            wrench_scaled = pygame.transform.scale(wrench_img, (w_size, w_size))
+            
+            # Position centered above castle
+            rx = cx + (castle.width_tiles * TILE_SIZE * zoom_level)/2 - w_size/2
+            ry = cy - w_size - 10
+            
+            screen.blit(wrench_scaled, (rx, ry))
+            repair_button_rect = pygame.Rect(rx, ry, w_size, w_size)
+            
+            # Draw Cost
+            cost = castle.get_repair_cost()
+            cost_txt = font.render(f"{cost}", True, (255, 255, 0))
+            screen.blit(cost_txt, (rx + w_size + 5, ry + w_size//2 - 10))
+
+
+    # Delete Button
     if selected_removable_object:
         asset_type, r, c = selected_removable_object
         obj_world_x = c * TILE_SIZE
@@ -314,54 +421,30 @@ def draw(seed, grid, features, ui_control_panel):
     else:
         delete_button_rect = None 
 
-    ui_control_panel.draw(screen)
+    # Draw UI Panel (Bottom Center Icons + Menus)
+    ui_control_panel.draw(screen, active_hamsters=hamsters, active_mcuncles=mcuncles)
 
-    # --- UI Layout: Left Side (Seed, Timer) ---
-    ui_x_left = 20
-    ui_y_left = 20
-    
-    # 1. Seed Text
-    status_text = f"Seed: {seed}"
-    txt_seed = font.render(status_text, True, (255,255,255))
-    screen.blit(txt_seed, (ui_x_left, ui_y_left))
-    ui_y_left += 30
-
-    # 2. Timer Text
-    timer_color = (255, 255, 255)
-    if game_timer <= 5.0 and not enemies_attacking:
-        timer_color = (255, 50, 50) 
-    
-    if enemies_attacking:
-        timer_str = "WAR!"
-        timer_color = (255, 0, 0)
-    else:
-        timer_str = f"Time until Enemy attacks: {int(game_timer)}s"
-        
-    txt_timer = timer_font.render(timer_str, True, timer_color)
-    screen.blit(txt_timer, (ui_x_left, ui_y_left))
-
-    # --- UI Layout: Top Right Corner (Cheese, Queue) ---
-    ui_x_right = WIDTH - 90 
+    # --- Top Right Info ---
+    ui_x_right = WIDTH - 80 
     ui_y_right = 20
-
+    
     # 1. Cheese Icon & Count
     if "cheese" in tiles:
-        cheese_icon = pygame.transform.scale(tiles["cheese"], (48, 48))
-        screen.blit(cheese_icon, (ui_x_right - 10, ui_y_right))
-        
+        cheese_icon = pygame.transform.scale(tiles["cheese"], (40, 40))
+        screen.blit(cheese_icon, (ui_x_right, ui_y_right))
         cheese_text = font.render(f"x {cheese_count}", True, (255, 255, 255))
-        screen.blit(cheese_text, (ui_x_right, ui_y_right + 50))
-        ui_y_right += 80
+        screen.blit(cheese_text, (ui_x_right, ui_y_right + 45))
+    ui_y_right += 80
 
     # 2. Queue List
     if castle:
         if castle.training_queue:
             queue_label = font.render("Queue:", True, (200, 200, 200))
+            # Center label somewhat relative to icons
             screen.blit(queue_label, (ui_x_right - 10, ui_y_right))
             ui_y_right += 25
             
             for unit_name in castle.training_queue:
-                # Draw a small icon for the unit
                 unit_icon = None
                 if unit_name == "McUncle" and "mcuncle" in tiles and tiles["mcuncle"]:
                     unit_icon = tiles["mcuncle"][0]
@@ -369,18 +452,46 @@ def draw(seed, grid, features, ui_control_panel):
                     if unit_name in tiles["hamsters"] and "idle" in tiles["hamsters"][unit_name]:
                         unit_icon = tiles["hamsters"][unit_name]["idle"][0]
                 
-                # Placeholder if no icon
                 if unit_icon:
-                    scaled_icon = pygame.transform.scale(unit_icon, (40, 40))
-                    screen.blit(scaled_icon, (ui_x_right, ui_y_right))
+                    scaled_icon = pygame.transform.scale(unit_icon, (30, 30))
+                    screen.blit(scaled_icon, (ui_x_right + 5, ui_y_right))
                 else:
-                    txt_name = font.render(unit_name[:2], True, (255,255,255))
-                    pygame.draw.rect(screen, (100,100,100), (ui_x_right, ui_y_right, 40, 40))
-                    screen.blit(txt_name, (ui_x_right+5, ui_y_right+10))
-                    
-                ui_y_right += 45
+                    pygame.draw.rect(screen, (100,100,100), (ui_x_right + 5, ui_y_right, 30, 30))
+                
+                ui_y_right += 35
 
+    # --- Left Side Info (Timer) ---
+    ui_x_left = 20
+    ui_y_left = 20
+    
+    timer_color = (255, 255, 255)
+    if game_timer <= 5.0 and not enemies_attacking:
+        timer_color = (255, 50, 50) 
+    
+    if enemies_attacking:
+        timer_str = "Status: WAVE ATTACK!"
+        timer_color = (255, 0, 0)
+    elif waiting_for_continue:
+        timer_str = "Status: Wave Cleared"
+    else:
+        timer_str = f"Time until Enemy attacks: {int(game_timer)}s"
+        
+    txt_timer = timer_font.render(timer_str, True, timer_color)
+    screen.blit(txt_timer, (ui_x_left, ui_y_left))
+    
+    # --- Continue Screen Overlay ---
+    if waiting_for_continue:
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 150))
+        screen.blit(overlay, (0, 0))
+        
+        msg = game_over_font.render("Wave Cleared!", True, (0, 255, 0))
+        screen.blit(msg, (WIDTH//2 - msg.get_width()//2, HEIGHT//2 - 50))
+        
+        sub = font.render(f"Next wave in {int(continue_timer)}...", True, (255, 255, 255))
+        screen.blit(sub, (WIDTH//2 - sub.get_width()//2, HEIGHT//2 + 20))
 
+    # --- Game Over Overlay ---
     if game_over:
         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 180))
@@ -397,7 +508,10 @@ def draw(seed, grid, features, ui_control_panel):
 async def main():
     global current_tool, selected_asset_type, player_placed_objects, llamas, mcuncles, hamsters, enemies, selected_entity, projectiles, castle, selected_llama_context, windmills, cheese_count
     global selected_removable_object, delete_button_rect, zoom_level, camera_x, camera_y, render_offset_x, render_offset_y, is_dragging, last_mouse_pos
-    global game_timer, enemies_attacking, game_over
+    global game_timer, enemies_attacking, game_over, repair_button_rect
+    global selection_drag_start, selection_rect, selected_units
+    global current_wave_duration, wave_number, waiting_for_continue, continue_timer
+    global active_formation
 
     # Init generation
     castle_c = max(0, COLUMNS - CASTLE_HITBOX_WIDTH_TILES - 3)
@@ -459,19 +573,52 @@ async def main():
     while running:
         dt = clock.tick(60) / 1000.0 
         
-        # --- Game Timer Logic ---
+        # --- Game Flow Logic ---
         if not game_over:
-            if game_timer > 0:
+            # 1. Pause Logic (Continue Screen)
+            if waiting_for_continue:
+                continue_timer -= dt
+                if continue_timer <= 0:
+                    waiting_for_continue = False
+                    enemies_attacking = False
+                    # Start Next Wave
+                    wave_number += 1
+                    current_wave_duration *= 0.5 # Reduce time by 50%
+                    game_timer = current_wave_duration
+                    print(f"Starting Wave {wave_number}. Timer: {game_timer:.2f}s")
+
+            # 2. Timer Logic
+            elif not enemies_attacking:
                 game_timer -= dt
                 if game_timer <= 0:
                     game_timer = 0
                     enemies_attacking = True
-                    spawn_enemy_wave(10) # Spawn 10 Pieros
+                    # Increase wave size slightly each wave
+                    spawn_enemy_wave(10 + (wave_number * 2))
+
+            # 3. Check for Wave Clear
+            elif enemies_attacking:
+                if len(enemies) == 0:
+                    # Wave Cleared
+                    print("Wave Cleared!")
+                    enemies_attacking = False
+                    
+                    # Every 5 waves, do pause
+                    if wave_number % 5 == 0:
+                        waiting_for_continue = True
+                        continue_timer = 5.0
+                    else:
+                        # Proceed immediately to timer logic
+                        wave_number += 1
+                        current_wave_duration *= 0.5
+                        game_timer = current_wave_duration
+                        print(f"Starting Wave {wave_number}. Timer: {game_timer:.2f}s")
 
             if castle and castle.health <= 0:
                 game_over = True
                 print("GAME OVER")
 
+        # --- Event Handling ---
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -496,7 +643,10 @@ async def main():
             elif event.type == pygame.KEYDOWN: 
                 if event.key == pygame.K_r: # Regenerate / Restart
                     print("\nRegenerating map...")
-                    # Reset Game State
+                    # RESET CHEESE TO 0 as requested explicitly
+                    cheese_count = 0
+                    
+                    # Reset Objects
                     player_placed_objects = [] 
                     windmills = [] 
                     llamas = [] 
@@ -505,13 +655,19 @@ async def main():
                     enemies = []
                     projectiles = []
                     selected_entity = None
+                    selected_units = []
                     selected_removable_object = None 
                     delete_button_rect = None 
                     selected_llama_context = None
-                    cheese_count = 0
-                    game_timer = GAME_TIMER_DURATION
+                    repair_button_rect = None
+                    
+                    # Reset Wave State
+                    game_timer = INITIAL_WAVE_TIMER
+                    current_wave_duration = INITIAL_WAVE_TIMER
+                    wave_number = 1
                     enemies_attacking = False
                     game_over = False
+                    waiting_for_continue = False
                     
                     castle_c = max(0, COLUMNS - CASTLE_HITBOX_WIDTH_TILES - 3)
                     max_r = max(CASTLE_HITBOX_HEIGHT_TILES, ROWS - CASTLE_HITBOX_HEIGHT_TILES - 2)
@@ -544,24 +700,31 @@ async def main():
                         if selected_entity:
                             selected_entity.selected = False
                             selected_entity = None
+                        selected_units = [] # Clear multi-selection
+                        for u in mcuncles + hamsters: u.selected = False
+                        
                         ui_control_panel.build_menu_active = False 
                         ui_control_panel.castle_menu_active = False
                         ui_control_panel.llama_menu_active = False
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                if game_over: continue # Block clicks on game over
+                if game_over: continue 
 
+                # 1. UI Check
                 if ui_control_panel.is_mouse_over(event.pos):
                     ui_action, ui_data = ui_control_panel.handle_event(event)
                     
-                    if ui_action == "select_asset":
+                    if ui_action == "change_formation":
+                        active_formation = ui_data
+                    
+                    elif ui_action == "select_asset":
                         current_tool = "place"
                         selected_asset_type = ui_data 
                         selected_removable_object = None
                         delete_button_rect = None
-                        if selected_entity:
-                            selected_entity.selected = False
-                            selected_entity = None
+                        # Deselect units
+                        for u in selected_units: u.selected = False
+                        selected_units = []
                     
                     elif ui_action == "train_unit":
                         if castle and isinstance(ui_data, dict) and "name" in ui_data:
@@ -575,8 +738,9 @@ async def main():
 
                     elif ui_action == "set_rally_point":
                         current_tool = "set_rally"
-                        selected_entity = None
-                        selected_removable_object = None
+                        # Deselect units
+                        for u in selected_units: u.selected = False
+                        selected_units = []
                         
                     elif ui_action == "llama_follow":
                         if selected_llama_context:
@@ -593,30 +757,73 @@ async def main():
                         if selected_llama_context:
                             selected_llama_context.stop_following()
                             ui_control_panel.llama_menu_active = False
+                    
+                    elif ui_action == "select_all_type":
+                        # Select all units of this type
+                        target_type = ui_data
+                        keys = pygame.key.get_pressed()
+                        shift_held = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
+                        
+                        if not shift_held:
+                            for u in selected_units: u.selected = False
+                            selected_units = []
+                        
+                        new_selection = []
+                        all_units = mcuncles + hamsters
+                        for u in all_units:
+                            if u.name == target_type:
+                                u.selected = True
+                                new_selection.append(u)
+                        selected_units.extend(new_selection)
+                        
+                        current_tool = "none"
 
                     continue 
 
-                # Right Click Deselect
-                if event.button == 3: 
-                    if current_tool != "none" or selected_entity or selected_removable_object or ui_control_panel.castle_menu_active or ui_control_panel.llama_menu_active:
+                # 2. Repair Button Check
+                if repair_button_rect and repair_button_rect.collidepoint(event.pos):
+                    cost = castle.get_repair_cost()
+                    if cheese_count >= cost:
+                        cheese_count -= cost
+                        castle.repair()
+                        print("Castle repaired!")
+                    else:
+                        print("Not enough cheese to repair!")
+                    continue
+
+                if event.button == 3: # Right Click
+                    mouse_screen_x, mouse_screen_y = event.pos
+                    
+                    # Move Command for Selected Units with Formations
+                    if selected_units:
+                        world_x, world_y = _screen_to_world_pixel(mouse_screen_x, mouse_screen_y)
+                        
+                        positions = get_formation_positions((world_x, world_y), len(selected_units), active_formation)
+                        
+                        for i, unit in enumerate(selected_units):
+                            if i < len(positions):
+                                tx, ty = positions[i]
+                                unit.set_precise_target(tx, ty)
+                        continue
+
+                    # If no units selected, Right Click Deselects UI/Tools
+                    if current_tool != "none" or selected_removable_object or ui_control_panel.castle_menu_active or ui_control_panel.llama_menu_active:
                         current_tool = "none"
                         selected_asset_type = None
-                        if selected_entity:
-                            selected_entity.selected = False
-                            selected_entity = None
                         selected_removable_object = None
                         delete_button_rect = None
                         ui_control_panel.castle_menu_active = False
                         ui_control_panel.llama_menu_active = False
                         selected_llama_context = None
                         continue
-                    else:
-                        if zoom_level > min_zoom: 
-                            is_dragging = True
-                            last_mouse_pos = event.pos
-                            continue
+                    
+                    # Camera Pan (last resort)
+                    if zoom_level > min_zoom: 
+                        is_dragging = True
+                        last_mouse_pos = event.pos
+                    continue
 
-                if event.button == 1: 
+                if event.button == 1: # Left Click
                     mouse_screen_x, mouse_screen_y = event.pos
                     grid_r_click, grid_c_click = _screen_to_world_grid(mouse_screen_x, mouse_screen_y)
                     world_x_click, world_y_click = _screen_to_world_pixel(mouse_screen_x, mouse_screen_y)
@@ -629,45 +836,7 @@ async def main():
                                 current_tool = "none"
                                 continue
 
-                    # Check Castle Click (Pixel Perfect)
-                    if castle:
-                        if castle.is_pixel_clicked((world_x_click, world_y_click)):
-                            ui_control_panel.castle_menu_active = True
-                            ui_control_panel.llama_menu_active = False
-                            print("Castle Selected")
-                            selected_entity = None
-                            selected_removable_object = None
-                            continue
-                        else:
-                            ui_control_panel.castle_menu_active = False
-
-                    # Check Llama Click (Pixel Perfect)
-                    llama_clicked = False
-                    for l in llamas:
-                        if l.is_pixel_clicked((world_x_click, world_y_click)):
-                            bob_unit = None
-                            for h in hamsters:
-                                if h.name == "Bob": bob_unit = h; break
-                            
-                            dist = 9999
-                            if bob_unit:
-                                dist = l.current_pixel_pos.distance_to(bob_unit.current_pixel_pos)
-                            
-                            if dist < 200: 
-                                selected_llama_context = l
-                                ui_control_panel.llama_menu_active = True
-                                ui_control_panel.castle_menu_active = False
-                                print("Llama clicked & Bob is near")
-                            else:
-                                print("Llama clicked but Bob is too far")
-                            
-                            llama_clicked = True
-                            break
-                    
-                    if llama_clicked: continue
-                    else: ui_control_panel.llama_menu_active = False
-
-
+                    # Delete Logic
                     if delete_button_rect and delete_button_rect.collidepoint(event.pos):
                         if selected_removable_object:
                             atype, ar, ac = selected_removable_object
@@ -710,67 +879,130 @@ async def main():
                                     player_placed_objects.append((selected_asset_type, grid_r_click, grid_c_click)) 
                             else:
                                 print("Cannot place here.")
+                        continue
                     
-                    else: 
-                        # Selection / Movement Logic
-                        clicked_unit = None
-                        
-                        for unit in mcuncles:
-                            if unit.grid_r == grid_r_click and unit.grid_c == grid_c_click:
-                                clicked_unit = unit
+                    # --- Normal Click Interaction ---
+                    
+                    # 1. Check Castle Click
+                    if castle and castle.is_pixel_clicked((world_x_click, world_y_click)):
+                        ui_control_panel.castle_menu_active = True
+                        ui_control_panel.llama_menu_active = False
+                        selected_llama_context = None
+                        # Deselect units
+                        for u in selected_units: u.selected = False
+                        selected_units = []
+                        continue
+                    
+                    # 2. Check Llama Click
+                    llama_clicked = False
+                    for l in llamas:
+                        if l.is_pixel_clicked((world_x_click, world_y_click)):
+                            selected_llama_context = l
+                            ui_control_panel.llama_menu_active = True
+                            ui_control_panel.castle_menu_active = False
+                            llama_clicked = True
+                            break
+                    if llama_clicked: continue
+                    
+                    # 3. Check Windmill/Static Selection
+                    found_removable = False
+                    for w in windmills:
+                        if w.is_pixel_clicked((world_x_click, world_y_click)):
+                            selected_removable_object = ("windmill", w.grid_r, w.grid_c)
+                            found_removable = True
+                            break
+                    if not found_removable:
+                        for asset_type, r, c in player_placed_objects:
+                            if r == grid_r_click and c == grid_c_click:
+                                selected_removable_object = (asset_type, r, c)
+                                found_removable = True
                                 break
-                        if not clicked_unit:
-                            for unit in hamsters:
-                                if unit.grid_r == grid_r_click and unit.grid_c == grid_c_click:
-                                    clicked_unit = unit
-                                    break
+                    if found_removable: 
+                        for u in selected_units: u.selected = False
+                        selected_units = []
+                        continue
+                    
+                    # 4. Check Unit Click (Select)
+                    clicked_unit = None
+                    all_units = mcuncles + hamsters
+                    for unit in all_units:
+                        # Simple screen-space hitbox check for precise click
+                        ux = unit.current_pixel_pos.x
+                        uy = unit.current_pixel_pos.y
+                        # Check in world coords
+                        if ux <= world_x_click <= ux + TILE_SIZE and uy <= world_y_click <= uy + TILE_SIZE:
+                            clicked_unit = unit
+                            break
+                    
+                    if clicked_unit:
+                        keys = pygame.key.get_pressed()
+                        shift_held = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
                         
-                        if clicked_unit:
-                            if selected_entity and selected_entity != clicked_unit:
-                                selected_entity.selected = False
-                            selected_entity = clicked_unit
-                            selected_entity.selected = True
-                            print(f"Selected {selected_entity.name}.")
-                            selected_removable_object = None
-                            delete_button_rect = None
+                        if not shift_held:
+                            # If picking new unit, clear others
+                            for u in selected_units: u.selected = False
+                            selected_units = []
                         
-                        elif selected_entity and not clicked_unit:
-                            # Move command
-                            if (grid_r_click, grid_c_click) in castle_occupied:
-                                print("Cannot move into the Castle!")
-                            else:
-                                print(f"Commanding {selected_entity.name} to move to ({grid_r_click}, {grid_c_click})")
-                                selected_entity.set_target(grid_r_click, grid_c_click)
+                        if clicked_unit not in selected_units:
+                            clicked_unit.selected = True
+                            selected_units.append(clicked_unit)
+                        elif shift_held:
+                            # Toggle off with shift
+                            clicked_unit.selected = False
+                            selected_units.remove(clicked_unit)
                         
-                        else:
-                            # Select Static Object or Windmill
-                            found_removable = False
-                            for w in windmills:
-                                if w.is_pixel_clicked((world_x_click, world_y_click)):
-                                    selected_removable_object = ("windmill", w.grid_r, w.grid_c)
-                                    found_removable = True
-                                    print("Windmill selected")
-                                    break
-                            
-                            if not found_removable:
-                                for asset_type, r, c in player_placed_objects:
-                                    if r == grid_r_click and c == grid_c_click:
-                                        selected_removable_object = (asset_type, r, c)
-                                        found_removable = True
-                                        break
-                            
-                            if found_removable:
-                                if selected_entity:
-                                    selected_entity.selected = False
-                                    selected_entity = None
-                            else:
-                                selected_removable_object = None
-                                delete_button_rect = None
-                                if selected_entity:
-                                    selected_entity.selected = False
-                                    selected_entity = None
+                        continue
+
+                    # 5. Empty Ground Click -> Move OR Drag
+                    # We changed movement to Right Click. 
+                    # Left Click on Empty Ground = Start Drag Selection.
+                    
+                    selection_drag_start = event.pos
+                    selected_removable_object = None
+                    delete_button_rect = None
+                    ui_control_panel.castle_menu_active = False
+                    ui_control_panel.llama_menu_active = False
             
             elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1 and selection_drag_start:
+                    # Finish Drag Selection
+                    drag_end = event.pos
+                    x1 = min(selection_drag_start[0], drag_end[0])
+                    y1 = min(selection_drag_start[1], drag_end[1])
+                    w = abs(drag_end[0] - selection_drag_start[0])
+                    h = abs(drag_end[1] - selection_drag_start[1])
+                    
+                    # If box is big enough, select units inside
+                    if w > 5 and h > 5:
+                        selection_rect = pygame.Rect(x1, y1, w, h)
+                        keys = pygame.key.get_pressed()
+                        shift_held = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
+                        
+                        if not shift_held:
+                            for u in selected_units: u.selected = False
+                            selected_units = []
+                            
+                        all_units = mcuncles + hamsters
+                        for unit in all_units:
+                            unit_screen_x, unit_screen_y = _world_to_screen_pixel(
+                                unit.current_pixel_pos.x + TILE_SIZE/2, 
+                                unit.current_pixel_pos.y + TILE_SIZE/2
+                            )
+                            if selection_rect.collidepoint(unit_screen_x, unit_screen_y):
+                                if unit not in selected_units:
+                                    unit.selected = True
+                                    selected_units.append(unit)
+                    else:
+                        # Just a click on ground - Deselect if not shift?
+                        keys = pygame.key.get_pressed()
+                        shift_held = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
+                        if not shift_held:
+                             for u in selected_units: u.selected = False
+                             selected_units = []
+
+                    selection_drag_start = None
+                    selection_rect = None
+
                 if event.button == 3: 
                     is_dragging = False
                     last_mouse_pos = None
@@ -783,6 +1015,14 @@ async def main():
                     camera_y -= dy / zoom_level
                     _clamp_camera() 
                     last_mouse_pos = event.pos 
+                
+                if selection_drag_start:
+                    drag_end = event.pos
+                    x1 = min(selection_drag_start[0], drag_end[0])
+                    y1 = min(selection_drag_start[1], drag_end[1])
+                    w = abs(drag_end[0] - selection_drag_start[0])
+                    h = abs(drag_end[1] - selection_drag_start[1])
+                    selection_rect = pygame.Rect(x1, y1, w, h)
 
         # Gather Obstacles
         current_obstacles = set()
@@ -809,22 +1049,22 @@ async def main():
                     else:
                         hamsters.append(new_unit)
             
+            all_friends = mcuncles + hamsters
+            
             for w in windmills:
-                produced = w.update(dt, llamas)
+                produced = w.update(dt, hamsters=all_friends)
                 if produced:
                     cheese_count += 1
-                    print(f"Cheese produced! Total: {cheese_count}")
 
             for llama in llamas: llama.update(dt, current_obstacles, pixel_obstacles, windmills)
             
             for mcuncle in mcuncles: 
-                mcuncle.update(dt, enemies, projectiles, current_obstacles, pixel_obstacles)
+                mcuncle.update(dt, enemies, projectiles, current_obstacles, pixel_obstacles, friends=all_friends)
                 
             for hamster in hamsters: 
-                hamster.update(dt, enemies, projectiles, current_obstacles, pixel_obstacles)
+                hamster.update(dt, enemies, projectiles, current_obstacles, pixel_obstacles, friends=all_friends)
                 
             for enemy in enemies: 
-                # Move to castle if timer is up
                 enemy.update(dt, current_obstacles, castle, move_to_castle=enemies_attacking) 
             
             enemies = [e for e in enemies if e.health > 0]
@@ -833,7 +1073,7 @@ async def main():
         draw(map_data["seed"], map_data["grid"], map_data["features"], ui_control_panel)
         pygame.display.flip()
         
-        await asyncio.sleep(0) # Required for Pygbag to not block browser loop
+        await asyncio.sleep(0) 
 
     pygame.quit()
     sys.exit()

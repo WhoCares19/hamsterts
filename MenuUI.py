@@ -21,40 +21,6 @@ class UIControlPanel:
         self.COLOR_TAB_INACTIVE = (60, 60, 60)
         self.COLOR_TEXT = (255, 255, 255)
         self.COLOR_PRICE = (255, 215, 0) # Gold/Yellow
-        self.COLOR_SEGMENT_LINE = (150, 150, 150)
-
-        # --- Main Control Circle ---
-        self.control_panel_radius = 50
-        self.control_panel_center_x = self.screen_width - self.control_panel_radius - 10
-        self.control_panel_center_y = self.screen_height - self.control_panel_radius - 10
-        self.control_panel_rect = pygame.Rect(
-            self.control_panel_center_x - self.control_panel_radius,
-            self.control_panel_center_y - self.control_panel_radius,
-            self.control_panel_radius * 2,
-            self.control_panel_radius * 2
-        )
-
-        # --- Segmented Buttons ---
-        self.segment_padding = 5 
-        self.segment_radius = self.control_panel_radius - self.segment_padding
-        self.segment_buttons = {} 
-        segment_center_offset = self.control_panel_radius / 2.5 
-
-        # B - Top (Now functionally redundant but kept for UI structure)
-        b_text_surf = self.button_font.render("B", True, self.COLOR_TEXT)
-        b_text_rect = b_text_surf.get_rect(center=(self.control_panel_center_x, self.control_panel_center_y - segment_center_offset))
-        self.segment_buttons['B'] = {'rect': b_text_rect.inflate(10,10), 'text_surf': b_text_surf, 'text_rect': b_text_rect}
-        
-        # S - Right
-        s_text_surf = self.button_font.render("S", True, self.COLOR_TEXT)
-        s_text_rect = s_text_surf.get_rect(center=(self.control_panel_center_x + segment_center_offset, self.control_panel_center_y))
-        self.segment_buttons['S'] = {'rect': s_text_rect.inflate(10,10), 'text_surf': s_text_surf, 'text_rect': s_text_rect}
-
-        # M - Bottom
-        m_text_surf = self.button_font.render("M", True, self.COLOR_TEXT)
-        m_text_rect = m_text_surf.get_rect(center=(self.control_panel_center_x, self.control_panel_center_y + segment_center_offset))
-        self.segment_buttons['M'] = {'rect': m_text_rect.inflate(10,10), 'text_surf': m_text_surf, 'text_rect': m_text_rect}
-
 
         # --- Castle Menu (Tabs: Hamsters | Buildings) ---
         self.castle_menu_active = False
@@ -66,12 +32,12 @@ class UIControlPanel:
 
         # Calculate Menu Dimensions
         num_hamster_items = 4 
-        # Width based on hamster tab (widest)
         self.castle_menu_width = (self.icon_size + self.padding) * num_hamster_items + self.padding + (self.icon_spacing * (num_hamster_items - 1)) + 40
-        self.castle_menu_height = 160 # Taller for tabs + icons + prices
+        self.castle_menu_height = 160 
 
         self.castle_menu_x = (self.screen_width - self.castle_menu_width) // 2
-        self.castle_menu_y = self.screen_height - self.castle_menu_height - 20
+        # Move menu up slightly to leave space for bottom bar
+        self.castle_menu_y = self.screen_height - self.castle_menu_height - 70 
         self.castle_menu_rect = pygame.Rect(self.castle_menu_x, self.castle_menu_y, self.castle_menu_width, self.castle_menu_height)
 
         # Tab Rects
@@ -105,14 +71,14 @@ class UIControlPanel:
         img_drac = None
         if "hamsters" in self.tiles and "Dracula" in self.tiles["hamsters"]:
             img_drac = pygame.transform.scale(self.tiles["hamsters"]["Dracula"]["idle"][0], (self.icon_size, self.icon_size))
-        self.hamster_buttons.append({"rect": self.train_drac_rect, "img": img_drac, "name": "Dracula", "price": 5})
+        self.hamster_buttons.append({"rect": self.train_drac_rect, "img": img_drac, "name": "Dracula", "price": 15})
 
         # TheHamster (10)
         self.train_ham_rect = pygame.Rect(self.train_drac_rect.right + self.icon_spacing, content_y, self.icon_size, self.icon_size)
         img_ham = None
         if "hamsters" in self.tiles and "TheHamster" in self.tiles["hamsters"]:
             img_ham = pygame.transform.scale(self.tiles["hamsters"]["TheHamster"]["idle"][0], (self.icon_size, self.icon_size))
-        self.hamster_buttons.append({"rect": self.train_ham_rect, "img": img_ham, "name": "TheHamster", "price": 5})
+        self.hamster_buttons.append({"rect": self.train_ham_rect, "img": img_ham, "name": "TheHamster", "price": 10})
 
         # Rally Point (Small button in corner)
         self.rally_point_button_rect = pygame.Rect(self.castle_menu_rect.right - 40, self.castle_menu_rect.bottom - 40, 32, 32)
@@ -137,7 +103,7 @@ class UIControlPanel:
         self.llama_menu_width = 220
         self.llama_menu_height = 80
         self.llama_menu_x = (self.screen_width - self.llama_menu_width) // 2
-        self.llama_menu_y = self.screen_height - self.llama_menu_height - 20
+        self.llama_menu_y = self.screen_height - self.llama_menu_height - 120
         self.llama_menu_rect = pygame.Rect(self.llama_menu_x, self.llama_menu_y, self.llama_menu_width, self.llama_menu_height)
         
         btn_w = 100
@@ -145,29 +111,113 @@ class UIControlPanel:
         self.llama_follow_rect = pygame.Rect(self.llama_menu_x + 5, self.llama_menu_y + 40, btn_w, btn_h)
         self.llama_stop_rect = pygame.Rect(self.llama_menu_x + 115, self.llama_menu_y + 40, btn_w, btn_h)
         
-        # We assume build_menu_active is no longer needed/deprecated as requested
         self.build_menu_active = False
-        self.build_menu_rect = pygame.Rect(0,0,0,0) # Placeholder
+        
+        # --- Army Summary UI ---
+        self.army_summary_rects = {}
+
+        # --- Formation UI (Top Center) ---
+        self.formation_active = "line"
+        self.formation_buttons = []
+        
+        form_btn_w = 60
+        form_btn_h = 30
+        form_spacing = 5
+        form_total_w = (form_btn_w * 4) + (form_spacing * 3)
+        form_start_x = (self.screen_width - form_total_w) // 2
+        form_y = 10
+        
+        formations = ["Line", "Circle", "Square", "Double"]
+        for i, name in enumerate(formations):
+            rect = pygame.Rect(form_start_x + i * (form_btn_w + form_spacing), form_y, form_btn_w, form_btn_h)
+            self.formation_buttons.append({"name": name.lower(), "label": name, "rect": rect})
 
 
-    def draw(self, screen):
-        # Draw Main Control Circle
-        pygame.draw.circle(screen, self.COLOR_BG, (self.control_panel_center_x, self.control_panel_center_y), self.control_panel_radius)
-        pygame.draw.circle(screen, self.COLOR_BORDER, (self.control_panel_center_x, self.control_panel_center_y), self.control_panel_radius, 2)
-
-        pygame.draw.line(screen, self.COLOR_SEGMENT_LINE, 
-                         (self.control_panel_center_x - self.control_panel_radius, self.control_panel_center_y),
-                         (self.control_panel_center_x + self.control_panel_radius, self.control_panel_center_y), 2)
-        pygame.draw.line(screen, self.COLOR_SEGMENT_LINE, 
-                         (self.control_panel_center_x, self.control_panel_center_y - self.control_panel_radius),
-                         (self.control_panel_center_x, self.control_panel_center_y + self.control_panel_radius), 2)
-
-        for key, button_info in self.segment_buttons.items():
-            screen.blit(button_info['text_surf'], button_info['text_rect'])
-
+    def draw(self, screen, active_hamsters=[], active_mcuncles=[]):
         mouse_pos = pygame.mouse.get_pos()
 
-        # Draw Castle Menu
+        # --- Draw Formation Buttons (Top Center) ---
+        for btn in self.formation_buttons:
+            # Highlight if selected
+            if self.formation_active == btn["name"]:
+                color = self.COLOR_TAB_ACTIVE
+                border_color = (255, 255, 0)
+            elif btn["rect"].collidepoint(mouse_pos):
+                color = self.COLOR_BUTTON_HIGHLIGHT
+                border_color = self.COLOR_BORDER
+            else:
+                color = self.COLOR_BG
+                border_color = self.COLOR_BORDER
+            
+            pygame.draw.rect(screen, color, btn["rect"], border_radius=5)
+            pygame.draw.rect(screen, border_color, btn["rect"], 1, border_radius=5)
+            
+            txt = self.price_font.render(btn["label"], True, self.COLOR_TEXT)
+            screen.blit(txt, (btn["rect"].centerx - txt.get_width()//2, btn["rect"].centery - txt.get_height()//2))
+
+
+        # --- Draw Army Summary (Bottom Center) ---
+        counts = {}
+        if active_mcuncles: counts["McUncle"] = len(active_mcuncles)
+        for h in active_hamsters:
+            name = h.name
+            counts[name] = counts.get(name, 0) + 1
+            
+        self.army_summary_rects = {}
+        
+        if counts:
+            icon_w, icon_h = 50, 50
+            gap = 10
+            total_w = len(counts) * (icon_w + gap)
+            start_x = (self.screen_width - total_w) // 2
+            start_y = self.screen_height - icon_h - 10
+            
+            current_x = start_x
+            # Sort for consistent order
+            sorted_keys = sorted(counts.keys())
+            
+            for name in sorted_keys:
+                count = counts[name]
+                rect = pygame.Rect(current_x, start_y, icon_w, icon_h)
+                self.army_summary_rects[name] = rect
+                
+                # Interaction Highlight
+                color = (60, 60, 60, 200)
+                if rect.collidepoint(mouse_pos):
+                    color = (100, 100, 100, 200)
+                
+                # Draw Box
+                surf = pygame.Surface((icon_w, icon_h), pygame.SRCALPHA)
+                pygame.draw.rect(surf, color, surf.get_rect(), border_radius=5)
+                pygame.draw.rect(surf, (150, 150, 150), surf.get_rect(), 1, border_radius=5)
+                screen.blit(surf, rect.topleft)
+                
+                # Draw Icon
+                icon = None
+                if name == "McUncle":
+                    if "mcuncle" in self.tiles and self.tiles["mcuncle"]: icon = self.tiles["mcuncle"][0]
+                elif "hamsters" in self.tiles and name in self.tiles["hamsters"]:
+                     # Use walk or idle
+                     if "idle" in self.tiles["hamsters"][name] and self.tiles["hamsters"][name]["idle"]:
+                         icon = self.tiles["hamsters"][name]["idle"][0]
+                
+                if icon:
+                    scaled = pygame.transform.scale(icon, (40, 40))
+                    screen.blit(scaled, (current_x + 5, start_y + 5))
+                else:
+                    # Fallback text
+                    txt = self.price_font.render(name[:2], True, self.COLOR_TEXT)
+                    screen.blit(txt, (current_x + 5, start_y + 15))
+                
+                # Draw Count
+                if count > 1:
+                    count_surf = self.price_font.render(f"x{count}", True, self.COLOR_PRICE)
+                    screen.blit(count_surf, (current_x + icon_w - count_surf.get_width() - 2, start_y + icon_h - count_surf.get_height() - 2))
+                
+                current_x += icon_w + gap
+
+
+        # --- Draw Castle Menu ---
         if self.castle_menu_active:
             # Background
             menu_surface = pygame.Surface(self.castle_menu_rect.size, pygame.SRCALPHA)
@@ -203,8 +253,7 @@ class UIControlPanel:
                     price_txt = self.price_font.render(f"{btn['price']} Ch.", True, self.COLOR_PRICE)
                     screen.blit(price_txt, (rect.centerx - price_txt.get_width()//2, rect.bottom + 5))
 
-                # Rally Point (Only in Hamsters or General?) Let's keep it visible in Hamsters tab or always? 
-                # Prompt didn't specify, but rally point is for units. Logic says Hamsters tab.
+                # Rally Point
                 if self.img_flagpole:
                     rect = self.rally_point_button_rect
                     color = self.COLOR_BUTTON_HIGHLIGHT if rect.collidepoint(mouse_pos) else self.COLOR_BUTTON_NORMAL
@@ -249,9 +298,14 @@ class UIControlPanel:
 
 
     def is_mouse_over(self, pos):
-        if self.control_panel_rect.collidepoint(pos): return True
         if self.castle_menu_active and self.castle_menu_rect.collidepoint(pos): return True
         if self.llama_menu_active and self.llama_menu_rect.collidepoint(pos): return True
+        # Check Army Summary
+        for rect in self.army_summary_rects.values():
+            if rect.collidepoint(pos): return True
+        # Check Formations
+        for btn in self.formation_buttons:
+            if btn["rect"].collidepoint(pos): return True
         return False
 
     def handle_event(self, event):
@@ -260,6 +314,17 @@ class UIControlPanel:
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1: 
             mouse_pos = event.pos
+
+            # Handle Formation Clicks
+            for btn in self.formation_buttons:
+                if btn["rect"].collidepoint(mouse_pos):
+                    self.formation_active = btn["name"]
+                    return "change_formation", btn["name"]
+
+            # Handle Army Summary Click
+            for name, rect in self.army_summary_rects.items():
+                if rect.collidepoint(mouse_pos):
+                    return "select_all_type", name
 
             # Handle Castle Menu
             if self.castle_menu_active:
@@ -282,7 +347,6 @@ class UIControlPanel:
                         if btn["rect"].collidepoint(mouse_pos):
                             action = "train_unit"
                             data = {"name": btn["name"], "price": btn["price"]}
-                            # Don't close menu immediately so they can buy multiple
                             
                 elif self.castle_menu_tab == "Buildings":
                      for btn in self.building_buttons:
@@ -297,14 +361,5 @@ class UIControlPanel:
                     action = "llama_follow"
                 elif self.llama_stop_rect.collidepoint(mouse_pos):
                     action = "llama_stop"
-
-            # Handle Main Buttons
-            else: 
-                # B button removed/no-op as per plan to move building to castle
-                # S and M still print
-                if self.segment_buttons['S']['rect'].collidepoint(mouse_pos):
-                    print("UI: 'S' clicked")
-                elif self.segment_buttons['M']['rect'].collidepoint(mouse_pos):
-                    print("UI: 'M' clicked")
 
         return action, data
