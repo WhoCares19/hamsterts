@@ -918,8 +918,8 @@ async def main():
                                         cheese_count -= cost
                                         
                                         # Increase next cost (0 -> 5 -> 10 ...)
-                                        if next_windmill_cost == 0: next_windmill_cost = 5
-                                        else: next_windmill_cost += 5
+                                        if next_windmill_cost == 0: next_windmill_cost = 0
+                                        else: next_windmill_cost += 0
                                     else:
                                         print("Not enough cheese for windmill!")
                                 else:
