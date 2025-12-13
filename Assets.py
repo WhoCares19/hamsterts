@@ -3,6 +3,7 @@ import os
 import sys
 from collections import deque 
 
+# ---------------- CONFIG ----------------
 # --- Configuration for non-pathway assets ---
 ASSET_FILES = {
     "grass": ("MainGrass.png", ""),  
@@ -11,7 +12,7 @@ ASSET_FILES = {
     "flagpole": ("FlagPole.png", "Assets"),
     "alfalfa": ("alfalfa.png", "tiles"), 
     "cheese": ("cheese.png", "tiles"), 
-    "wrench": ("wrench.png", "Assets"), # New Wrench Icon
+    "wrench": ("wrench.png", "Assets"),
 }
 
 # --- Configuration for Llama assets ---
@@ -48,8 +49,11 @@ CASTLE_SCALE_FACTOR = 4.0
 
 # --- Configuration for McUncle assets ---
 MCUNCLE_BASE_FOLDER = os.path.join("Hamsters", "Mcunle") 
-MCUNCLE_FRAME_COUNT = 6 
 MCUNCLE_SCALE_FACTOR = 1.0 
+MCUNCLE_CONFIG = {
+    "idle": {"file": "mcuncle_Idle.png", "w": 160, "h": 160, "count": 6},
+    "walk": {"file": "walk_url.png",     "w": 128, "h": 128, "count": 6}
+}
 
 # --- Configuration for Hamsters (Bob, Dracula, TheHamster) ---
 HAMSTER_ROOT_FOLDER = "Hamsters"
@@ -114,11 +118,11 @@ ENEMY_SCALE_FACTOR = 1.0
 # Internal dictionaries to store loaded Pygame surfaces
 _loaded_assets = {} 
 _loaded_llama_sprites = {} 
-_loaded_mcuncle_sprites = [] 
+_loaded_mcuncle_sprites = {} 
 _loaded_hamsters = {} 
 _loaded_projectiles = {} 
 _loaded_enemies = {} 
-_loaded_forest_sprites = [] # Stores list of tree images
+_loaded_forest_sprites = [] 
 
 
 # --- Helper: Remove Background (Flood Fill) ---
@@ -145,6 +149,54 @@ def _remove_white_background_floodfill(surface):
                         queue.append((nx, ny))
     pixels.close() 
     return surface
+
+# --- Helper: Get Common Bounding Box ---
+def _get_common_bounding_rect(frames):
+    """Calculates the smallest rectangle that contains non-transparent pixels across ALL frames."""
+    min_x, min_y = float('inf'), float('inf')
+    max_x, max_y = 0, 0
+    found_any = False
+
+    for f in frames:
+        rect = f.get_bounding_rect()
+        if rect.width > 0 and rect.height > 0:
+            found_any = True
+            if rect.x < min_x: min_x = rect.x
+            if rect.y < min_y: min_y = rect.y
+            if rect.right > max_x: max_x = rect.right
+            if rect.bottom > max_y: max_y = rect.bottom
+    
+    if not found_any:
+        return pygame.Rect(0, 0, frames[0].get_width(), frames[0].get_height())
+    
+    return pygame.Rect(min_x, min_y, max_x - min_x, max_y - min_y)
+
+# --- Helper: Scale and Center (Prioritizing Height) ---
+def _scale_and_center(surface, target_size):
+    """Scales surface to match target_size height (mostly) to prevent squashing."""
+    w, h = surface.get_size()
+    if w <= 0 or h <= 0: return surface
+    
+    # Prioritize Height: Scale so height matches target_size
+    scale = target_size / h
+    
+    # Safety: If scaling by height makes width MASSIVE (e.g. > 2x target), revert to fitting within box
+    if w * scale > target_size * 2.0:
+        scale = target_size / w
+        
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    
+    scaled_surf = pygame.transform.scale(surface, (new_w, new_h))
+    
+    # Create target canvas (allow width to overhang if needed, or center in tile)
+    final_surf = pygame.Surface((max(target_size, new_w), max(target_size, new_h)), pygame.SRCALPHA)
+    
+    offset_x = (final_surf.get_width() - new_w) // 2
+    offset_y = (final_surf.get_height() - new_h) // 2
+    
+    final_surf.blit(scaled_surf, (offset_x, offset_y))
+    return final_surf
 
 
 # --- Helper: locate images in possible folders ---
@@ -185,9 +237,7 @@ def load_game_assets(tile_size, screen_width, screen_height, search_folders):
             img = pygame.image.load(path).convert_alpha()
             _loaded_assets[name] = pygame.transform.scale(img, (tile_size, tile_size))
         except FileNotFoundError as e:
-            # It's possible wrench doesn't exist yet, we don't want to crash hard if it's just one feature
             print(f"Warning in Assets.py: {e}")
-            # raise # Commented out raise to allow running even if wrench is missing (it will just be None)
         except Exception as e:
             print(f"An unexpected error occurred loading feature tile '{asset_filename}': {e}")
             raise 
@@ -296,25 +346,68 @@ def load_castle_assets(tile_size, search_folders):
     print(f"DEBUG: Loaded {len(_loaded_assets['castle'])} castle animation frames.")
 
 
-# --- Load McUncle assets ---
+# --- Load McUncle assets (UPDATED) ---
 def load_mcuncle_assets(tile_size, search_folders):
     global _loaded_mcuncle_sprites
-    _loaded_mcuncle_sprites = []
-    sprite_size = int(tile_size * MCUNCLE_SCALE_FACTOR)
+    _loaded_mcuncle_sprites = {} 
+    
+    # 1. Determine Global Scale based on Idle to ensure uniform visual size
+    global_scale_ratio = None
+    target_height_baseline = int(tile_size * MCUNCLE_SCALE_FACTOR)
+    
+    # Attempt to find Idle config to establish baseline scale
 
-    for i in range(1, MCUNCLE_FRAME_COUNT + 1): 
-        filename = f"Mcunle_{i}.png" 
+
+    # 2. Process all states using the determined global scale (if available)
+    for state, config in MCUNCLE_CONFIG.items():
+        filename = config["file"]
+        frame_w = config["w"]
+        frame_h = config["h"]
+        count = config["count"]
+        
         try:
             path = _find_image_file(filename, search_folders, MCUNCLE_BASE_FOLDER)
-            img = pygame.image.load(path).convert_alpha()
-            _loaded_mcuncle_sprites.append(pygame.transform.scale(img, (sprite_size, sprite_size)))
+            sheet = pygame.image.load(path).convert_alpha()
+            
+            raw_frames = []
+            for i in range(count):
+                rect = pygame.Rect(i * frame_w, 0, frame_w, frame_h)
+                if rect.x + rect.w > sheet.get_width(): break
+                raw_frames.append(sheet.subsurface(rect))
+            
+            # Crop to content
+            common_rect = _get_common_bounding_rect(raw_frames)
+            
+            final_frames = []
+            
+            # Use global scale if available, otherwise fit to target height
+            current_scale = global_scale_ratio if global_scale_ratio else (target_height_baseline / common_rect.height if common_rect.height > 0 else 1.0)
+
+            new_w = int(common_rect.width * current_scale)
+            new_h = int(common_rect.height * current_scale)
+            
+            for rf in raw_frames:
+                # Crop
+                cropped = rf.subsurface(common_rect).copy()
+                # Scale
+                scaled = pygame.transform.scale(cropped, (new_w, new_h))
+                # ---- FIXED CANVAS NORMALIZATION (THIS IS THE FIX) ----
+            canvas_size = tile_size
+            canvas = pygame.Surface((canvas_size, canvas_size), pygame.SRCALPHA)
+
+            x = (canvas_size - scaled.get_width()) // 2
+            y = (canvas_size - scaled.get_height()) // 2
+
+            canvas.blit(scaled, (x, y))
+            final_frames.append(canvas)
+                
+            _loaded_mcuncle_sprites[state] = final_frames
+            
         except FileNotFoundError as e:
-            print(f"CRITICAL ERROR in Assets.py: {e}")
-            raise 
-        except Exception as e:
-            print(f"An unexpected error occurred loading McUncle asset '{filename}': {e}")
+            print(f"CRITICAL ERROR in Assets.py: Could not find McUncle sheet '{filename}': {e}")
             raise
-    print(f"DEBUG: Loaded {len(_loaded_mcuncle_sprites)} McUncle animation frames.")
+
+    print(f"DEBUG: Loaded McUncle states: {list(_loaded_mcuncle_sprites.keys())}")
 
 
 # --- Load Hamster Assets ---

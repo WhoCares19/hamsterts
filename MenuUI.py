@@ -57,8 +57,15 @@ class UIControlPanel:
         # McUncle (30)
         self.train_mcuncle_rect = pygame.Rect(self.castle_menu_x + self.padding, content_y, self.icon_size, self.icon_size)
         img_mcuncle = None
-        if "mcuncle" in self.tiles and self.tiles["mcuncle"]:
-             img_mcuncle = pygame.transform.scale(self.tiles["mcuncle"][0], (self.icon_size, self.icon_size))
+        
+        # FIX: Check for dictionary structure (idle/walk) vs old list structure
+        if "mcuncle" in self.tiles:
+            mc_data = self.tiles["mcuncle"]
+            if isinstance(mc_data, dict) and "idle" in mc_data and mc_data["idle"]:
+                 img_mcuncle = pygame.transform.scale(mc_data["idle"][0], (self.icon_size, self.icon_size))
+            elif isinstance(mc_data, list) and mc_data: # Fallback
+                 img_mcuncle = pygame.transform.scale(mc_data[0], (self.icon_size, self.icon_size))
+
         self.hamster_buttons.append({
             "rect": self.train_mcuncle_rect, 
             "img": img_mcuncle, 
@@ -111,6 +118,12 @@ class UIControlPanel:
         self.img_flagpole = None
         if "flagpole" in self.tiles:
              self.img_flagpole = pygame.transform.scale(self.tiles["flagpole"], (32, 32))
+
+        # Repair Button (To the left of Rally Point)
+        self.repair_button_rect = pygame.Rect(self.rally_point_button_rect.left - 40, self.rally_point_button_rect.y, 32, 32)
+        self.img_wrench = None
+        if "wrench" in self.tiles:
+            self.img_wrench = pygame.transform.scale(self.tiles["wrench"], (32, 32))
 
 
         # -- Buildings Tab Assets --
@@ -192,18 +205,16 @@ class UIControlPanel:
             pygame.draw.circle(screen, color, (cx + off, cy + off), r)
 
     def draw_tooltip(self, screen, text, pos):
-        # Break text into multiple lines if too long (simple wrapping)
         words = text.split(' ')
         lines = []
         current_line = []
         for word in words:
             current_line.append(word)
-            if len(" ".join(current_line)) > 25: # Char limit per line
+            if len(" ".join(current_line)) > 25: 
                 lines.append(" ".join(current_line[:-1]))
                 current_line = [word]
         lines.append(" ".join(current_line))
 
-        # Calculate box size
         line_height = 20
         max_w = 0
         total_h = len(lines) * line_height + 10
@@ -214,14 +225,11 @@ class UIControlPanel:
             surfaces.append(s)
         
         box_w = max_w + 20
-        
-        # Keep tooltip on screen
         x, y = pos
         if x + box_w > self.screen_width: x = self.screen_width - box_w
-        if y - total_h < 0: y += 30 # Show below cursor if too high
-        else: y -= total_h # Show above cursor
+        if y - total_h < 0: y += 30 
+        else: y -= total_h 
         
-        # Draw
         bg_rect = pygame.Rect(x, y, box_w, total_h)
         s = pygame.Surface((box_w, total_h), pygame.SRCALPHA)
         s.fill(self.COLOR_TOOLTIP_BG)
@@ -232,7 +240,7 @@ class UIControlPanel:
             screen.blit(surf, (x + 10, y + 5 + i * line_height))
 
 
-    def draw(self, screen, active_hamsters=[], active_mcuncles=[]):
+    def draw(self, screen, active_hamsters=[], active_mcuncles=[], castle_needs_repair=False):
         mouse_pos = pygame.mouse.get_pos()
 
         # --- Draw Formation Buttons ---
@@ -288,7 +296,11 @@ class UIControlPanel:
                 
                 icon = None
                 if name == "McUncle":
-                    if "mcuncle" in self.tiles and self.tiles["mcuncle"]: icon = self.tiles["mcuncle"][0]
+                    # FIX for McUncle in Army Summary too
+                    if "mcuncle" in self.tiles:
+                        mc_data = self.tiles["mcuncle"]
+                        if isinstance(mc_data, dict) and "idle" in mc_data: icon = mc_data["idle"][0]
+                        elif isinstance(mc_data, list): icon = mc_data[0]
                 elif "hamsters" in self.tiles and name in self.tiles["hamsters"]:
                      if "idle" in self.tiles["hamsters"][name] and self.tiles["hamsters"][name]["idle"]:
                          icon = self.tiles["hamsters"][name]["idle"][0]
@@ -346,6 +358,13 @@ class UIControlPanel:
                     color = self.COLOR_BUTTON_HIGHLIGHT if rect.collidepoint(mouse_pos) else self.COLOR_BUTTON_NORMAL
                     pygame.draw.rect(screen, color, rect, border_radius=3)
                     screen.blit(self.img_flagpole, rect.topleft)
+                
+                # Repair Icon (Only if needed)
+                if castle_needs_repair and self.img_wrench:
+                    rect = self.repair_button_rect
+                    color = self.COLOR_BUTTON_HIGHLIGHT if rect.collidepoint(mouse_pos) else self.COLOR_BUTTON_NORMAL
+                    pygame.draw.rect(screen, color, rect, border_radius=3)
+                    screen.blit(self.img_wrench, rect.topleft)
                     
             elif self.castle_menu_tab == "Buildings":
                 for btn in self.building_buttons:
@@ -422,10 +441,18 @@ class UIControlPanel:
                         action = "set_rally_point"
                         self.castle_menu_active = False 
                     
+                    # Repair Click
+                    if self.repair_button_rect.collidepoint(mouse_pos):
+                        return "repair_castle", None
+
                     for btn in self.hamster_buttons:
                         if btn["rect"].collidepoint(mouse_pos):
-                            action = "train_unit"
-                            data = {"name": btn["name"], "price": btn["price"]}
+                            # Check Shift for infinite
+                            keys = pygame.key.get_pressed()
+                            if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
+                                return "train_unit_infinite", {"name": btn["name"], "price": btn["price"]}
+                            else:
+                                return "train_unit", {"name": btn["name"], "price": btn["price"]}
                             
                 elif self.castle_menu_tab == "Buildings":
                      for btn in self.building_buttons:

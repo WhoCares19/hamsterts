@@ -3,20 +3,25 @@ import random
 import Assets
 
 # --- Global Gameplay Settings ---
-# Damage values for units based on descriptions
 UNIT_DAMAGE = {
-    "McUncle": 50,      # Deadly horseman
-    "Bob": 5,           # Useless RAT
-    "Dracula": 30,      # Deadly blood sucker
-    "TheHamster": 20    # Deadly hobo
+    "McUncle": 50,      
+    "Bob": 5,           
+    "Dracula": 30,      
+    "TheHamster": 20    
 }
 
-# Bob's Windmill Boost (0.5 = 50% per Bob)
 BOB_BOOST_PER_UNIT = 0.5
-
-# Unit Collision/Separation Settings
 SEPARATION_RADIUS = 30.0
 SEPARATION_FORCE = 200.0
+
+# Map Boundaries (Set from main.py)
+WORLD_WIDTH_PX = 1280
+WORLD_HEIGHT_PX = 720
+
+def set_world_dimensions(w, h):
+    global WORLD_WIDTH_PX, WORLD_HEIGHT_PX
+    WORLD_WIDTH_PX = w
+    WORLD_HEIGHT_PX = h
 
 # --- Global Castle Settings ---
 CASTLE_HITBOX_WIDTH_TILES = 4
@@ -131,10 +136,10 @@ class Windmill:
         if len(alfalfa_coords) >= 4:
             alfalfa_coords.sort()
             selected_coords = [
-                alfalfa_coords[1], # Top
-                alfalfa_coords[len(alfalfa_coords)//2 - 1], # Left
-                alfalfa_coords[len(alfalfa_coords)//2 + 2], # Right
-                alfalfa_coords[-2] # Bottom
+                alfalfa_coords[1], 
+                alfalfa_coords[len(alfalfa_coords)//2 - 1], 
+                alfalfa_coords[len(alfalfa_coords)//2 + 2], 
+                alfalfa_coords[-2] 
             ]
         else:
             selected_coords = alfalfa_coords[:4]
@@ -267,6 +272,7 @@ class Castle:
         rally_c = max(0, self.grid_c - 2)
         self.rally_point = (rally_r, rally_c)
         self.flagpole = FlagPole(self.rally_point, self.tile_size)
+        self.infinite_production = None 
         
         self.health = 1000
         self.max_health = 1000
@@ -387,7 +393,7 @@ class Castle:
 
 
 class Enemy:
-    def __init__(self, start_grid_pos, tile_size):
+    def __init__(self, start_grid_pos, tile_size, extra_health=0):
         self.grid_r, self.grid_c = start_grid_pos
         self.tile_size = tile_size
         self.name = "Piero"
@@ -398,12 +404,12 @@ class Enemy:
         self.animation_frame = 0
         self.animation_speed = 0.2
         self.animation_timer = 0.0
-        self.health = 100
-        self.max_health = 100
+        self.health = 100 + extra_health
+        self.max_health = 100 + extra_health
         self.facing_right = True 
         
         self.base_speed = 1.5
-        self.speed_multiplier = 1.0 # Reset every frame
+        self.speed_multiplier = 1.0 
         self.attack_cooldown = 1.0
         self.attack_timer = 0.0
         self.damage = 50
@@ -439,11 +445,15 @@ class Enemy:
                     if norm.x > 0: self.facing_right = True
                     else: self.facing_right = False
                     
-                    # Apply speed modifier
                     current_speed = self.base_speed * self.speed_multiplier
+                    
+                    # Basic movement
                     self.current_pixel_pos += norm * current_speed
+                    
+                    # CLAMP to World Bounds
+                    self.current_pixel_pos.x = max(0, min(self.current_pixel_pos.x, WORLD_WIDTH_PX - self.tile_size))
+                    self.current_pixel_pos.y = max(0, min(self.current_pixel_pos.y, WORLD_HEIGHT_PX - self.tile_size))
         
-        # Reset multiplier for next frame (so slow only applies if hamster is near)
         self.speed_multiplier = 1.0
 
     def draw(self, screen):
@@ -713,6 +723,10 @@ class Llama:
                         break
                 if not collided:
                     self.current_pixel_pos = next_pos
+                    # CLAMP
+                    self.current_pixel_pos.x = max(0, min(self.current_pixel_pos.x, WORLD_WIDTH_PX - self.tile_size))
+                    self.current_pixel_pos.y = max(0, min(self.current_pixel_pos.y, WORLD_HEIGHT_PX - self.tile_size))
+                    
                     self.grid_c = int(self.current_pixel_pos.x // self.tile_size)
                     self.grid_r = int(self.current_pixel_pos.y // self.tile_size)
                 if direction_vec.x > 0: 
@@ -751,6 +765,9 @@ class Llama:
                 move_vector = self.target_pixel_pos - self.current_pixel_pos
                 if move_vector.length() > 0: 
                     self.current_pixel_pos += move_vector.normalize() * self.speed
+                    # CLAMP
+                    self.current_pixel_pos.x = max(0, min(self.current_pixel_pos.x, WORLD_WIDTH_PX - self.tile_size))
+                    self.current_pixel_pos.y = max(0, min(self.current_pixel_pos.y, WORLD_HEIGHT_PX - self.tile_size))
                 else: 
                     self.current_pixel_pos = self.target_pixel_pos
 
@@ -791,7 +808,10 @@ class McUncle:
         self.is_moving = False
         self.selected = False 
         self.name = "McUncle" 
-        self.sprites = Assets._loaded_mcuncle_sprites
+        # Update sprite handling for state logic
+        self.sprites = Assets._loaded_mcuncle_sprites # Dict {state: frames}
+        self.state = "idle"
+        
         self.animation_frame = 0
         self.animation_speed = 0.1 
         self.animation_timer = 0.0
@@ -799,7 +819,7 @@ class McUncle:
         self.attack_range = 250
         self.attack_cooldown = 1.0 
         self.cooldown_timer = 0.0
-        self.radius = 25 # collision radius
+        self.radius = 25 
         
     def set_target(self, grid_r, grid_c):
         self.target_pixel_pos = pygame.Vector2(grid_c * self.tile_size, grid_r * self.tile_size)
@@ -812,26 +832,28 @@ class McUncle:
     def update(self, dt, enemies_list=None, projectiles_list=None, obstacles=set(), pixel_obstacles=[], friends=[]):
         self.animation_timer += dt
         if self.animation_timer >= self.animation_speed:
-            if self.sprites:
-                self.animation_frame = (self.animation_frame + 1) % len(self.sprites)
+            # Determine current frame list based on state
+            frames = self.sprites.get(self.state, self.sprites.get("idle", []))
+            if frames:
+                self.animation_frame = (self.animation_frame + 1) % len(frames)
             self.animation_timer = 0.0
             
         # Movement & Collision
         if self.is_moving:
+            self.state = "walk" # Update state
             direction = self.target_pixel_pos - self.current_pixel_pos
             distance = direction.length()
             
-            # Arrived check
             if distance < 5:
                 self.is_moving = False
                 self.current_pixel_pos = self.target_pixel_pos
+                self.state = "idle" # Stop
             else:
                 if direction.x < 0: self.facing_right = False
                 elif direction.x > 0: self.facing_right = True
                 
                 move_vec = direction.normalize() * self.speed
                 
-                # Separation Force
                 sep_vec = pygame.Vector2(0, 0)
                 for f in friends:
                     if f is not self:
@@ -840,26 +862,35 @@ class McUncle:
                             diff = self.current_pixel_pos - f.current_pixel_pos
                             sep_vec += diff.normalize() * (SEPARATION_FORCE / dist)
                 
-                # Check next pos validity
-                next_pos = self.current_pixel_pos + move_vec + (sep_vec * 0.05) 
+                proposed_pos = self.current_pixel_pos + move_vec + (sep_vec * 0.05)
                 
-                center_x = next_pos.x + self.tile_size/2
-                center_y = next_pos.y + self.tile_size/2
+                def is_blocked(pos):
+                    cx = pos.x + self.tile_size/2
+                    cy = pos.y + self.tile_size/2
+                    if pos.x < 0 or pos.x > WORLD_WIDTH_PX - self.tile_size: return True
+                    if pos.y < 0 or pos.y > WORLD_HEIGHT_PX - self.tile_size: return True
+                    
+                    for obj in pixel_obstacles:
+                        if obj and obj.check_collision((cx, cy)):
+                            return True
+                    return False
+
+                if not is_blocked(proposed_pos):
+                    self.current_pixel_pos = proposed_pos
+                else:
+                    try_x = pygame.Vector2(proposed_pos.x, self.current_pixel_pos.y)
+                    if not is_blocked(try_x):
+                        self.current_pixel_pos = try_x
+                    else:
+                        try_y = pygame.Vector2(self.current_pixel_pos.x, proposed_pos.y)
+                        if not is_blocked(try_y):
+                            self.current_pixel_pos = try_y
                 
-                # Simple obstacle check
-                blocked = False
-                for obj in pixel_obstacles:
-                    if obj and obj.check_collision((center_x, center_y)):
-                        blocked = True
-                        break
-                
-                if not blocked:
-                    self.current_pixel_pos = next_pos
-                    self.grid_c = int(self.current_pixel_pos.x // self.tile_size)
-                    self.grid_r = int(self.current_pixel_pos.y // self.tile_size)
+                self.grid_c = int(self.current_pixel_pos.x // self.tile_size)
+                self.grid_r = int(self.current_pixel_pos.y // self.tile_size)
 
         else:
-            # Idle separation to stop stacking when stopped
+            self.state = "idle" # Ensure idle state
             sep_vec = pygame.Vector2(0, 0)
             for f in friends:
                 if f is not self:
@@ -869,7 +900,20 @@ class McUncle:
                         sep_vec += diff.normalize() * (SEPARATION_FORCE / dist)
             
             if sep_vec.length() > 0.1:
-                self.current_pixel_pos += sep_vec * 0.05
+                proposed_pos = self.current_pixel_pos + (sep_vec * 0.05)
+                proposed_pos.x = max(0, min(proposed_pos.x, WORLD_WIDTH_PX - self.tile_size))
+                proposed_pos.y = max(0, min(proposed_pos.y, WORLD_HEIGHT_PX - self.tile_size))
+                
+                blocked = False
+                center_x = proposed_pos.x + self.tile_size/2
+                center_y = proposed_pos.y + self.tile_size/2
+                for obj in pixel_obstacles:
+                    if obj and obj.check_collision((center_x, center_y)):
+                        blocked = True
+                        break
+                
+                if not blocked:
+                    self.current_pixel_pos = proposed_pos
 
         if self.cooldown_timer > 0:
             self.cooldown_timer -= dt
@@ -890,8 +934,9 @@ class McUncle:
                 projectiles_list.append(proj)
 
     def draw(self, screen):
-        if self.sprites:
-            sprite = self.sprites[self.animation_frame]
+        frames = self.sprites.get(self.state, self.sprites.get("idle", []))
+        if frames:
+            sprite = frames[self.animation_frame % len(frames)]
             if not self.facing_right:
                 sprite = pygame.transform.flip(sprite, True, False)
             screen.blit(sprite, (self.current_pixel_pos.x, self.current_pixel_pos.y))
@@ -958,7 +1003,6 @@ class Hamster:
                 
                 move_vec = direction.normalize() * self.speed
                 
-                # Separation
                 sep_vec = pygame.Vector2(0, 0)
                 for f in friends:
                     if f is not self:
@@ -967,22 +1011,35 @@ class Hamster:
                             diff = self.current_pixel_pos - f.current_pixel_pos
                             sep_vec += diff.normalize() * (SEPARATION_FORCE / dist)
                 
-                next_pos = self.current_pixel_pos + move_vec + (sep_vec * 0.05)
-                center_x = next_pos.x + self.tile_size/2
-                center_y = next_pos.y + self.tile_size/2
+                proposed_pos = self.current_pixel_pos + move_vec + (sep_vec * 0.05)
                 
-                blocked = False
-                for obj in pixel_obstacles:
-                    if obj and obj.check_collision((center_x, center_y)):
-                        blocked = True
-                        break
+                # Collision Check + Sliding
+                def is_blocked(pos):
+                    cx = pos.x + self.tile_size/2
+                    cy = pos.y + self.tile_size/2
+                    # Bounds
+                    if pos.x < 0 or pos.x > WORLD_WIDTH_PX - self.tile_size: return True
+                    if pos.y < 0 or pos.y > WORLD_HEIGHT_PX - self.tile_size: return True
+                    
+                    for obj in pixel_obstacles:
+                        if obj and obj.check_collision((cx, cy)):
+                            return True
+                    return False
 
-                if not blocked:
-                    self.current_pixel_pos = next_pos
-                    self.grid_c = int(self.current_pixel_pos.x // self.tile_size)
-                    self.grid_r = int(self.current_pixel_pos.y // self.tile_size)
+                if not is_blocked(proposed_pos):
+                    self.current_pixel_pos = proposed_pos
+                else:
+                    try_x = pygame.Vector2(proposed_pos.x, self.current_pixel_pos.y)
+                    if not is_blocked(try_x):
+                        self.current_pixel_pos = try_x
+                    else:
+                        try_y = pygame.Vector2(self.current_pixel_pos.x, proposed_pos.y)
+                        if not is_blocked(try_y):
+                            self.current_pixel_pos = try_y
+
+                self.grid_c = int(self.current_pixel_pos.x // self.tile_size)
+                self.grid_r = int(self.current_pixel_pos.y // self.tile_size)
         else:
-            # Idle separation
             sep_vec = pygame.Vector2(0, 0)
             for f in friends:
                 if f is not self:
@@ -992,7 +1049,21 @@ class Hamster:
                         sep_vec += diff.normalize() * (SEPARATION_FORCE / dist)
             
             if sep_vec.length() > 0.1:
-                self.current_pixel_pos += sep_vec * 0.05
+                proposed_pos = self.current_pixel_pos + (sep_vec * 0.05)
+                # Bounds
+                proposed_pos.x = max(0, min(proposed_pos.x, WORLD_WIDTH_PX - self.tile_size))
+                proposed_pos.y = max(0, min(proposed_pos.y, WORLD_HEIGHT_PX - self.tile_size))
+                
+                blocked = False
+                center_x = proposed_pos.x + self.tile_size/2
+                center_y = proposed_pos.y + self.tile_size/2
+                for obj in pixel_obstacles:
+                    if obj and obj.check_collision((center_x, center_y)):
+                        blocked = True
+                        break
+                
+                if not blocked:
+                    self.current_pixel_pos = proposed_pos
 
         if self.cooldown_timer > 0:
             self.cooldown_timer -= dt
@@ -1015,12 +1086,10 @@ class Hamster:
         # Apply slow logic for "The Hamster"
         if self.name == "The Hamster" and enemies_list:
             my_center = self.current_pixel_pos + pygame.Vector2(self.tile_size/2, self.tile_size/2)
-            # Apply slow to all enemies within attack range (or slightly larger?)
-            # Let's say range 200
             for enemy in enemies_list:
                 en_center = enemy.current_pixel_pos + pygame.Vector2(enemy.tile_size/2, enemy.tile_size/2)
                 if my_center.distance_to(en_center) < 200:
-                    enemy.speed_multiplier = 0.8 # 20% slow
+                    enemy.speed_multiplier = 0.8 
 
     def draw(self, screen):
         frames = self.sprites.get(self.state, self.sprites.get("idle", []))
