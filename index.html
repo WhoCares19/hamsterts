@@ -348,9 +348,10 @@ config = {
 <body>
 
     <div id="transfer" align="center">
-        <div class="custom-loading">
-            <img src="tiles/Tree.png" alt="Custom loading image" />
-            <p>Initializing Hamster Game...</p>
+        <img src="Tree.png" style="width:256px; display:block; margin:auto;">
+        <div class="emscripten" id="status">Downloading...</div>
+        <div class="emscripten">
+            <progress value="0" max="100" id="progress"></progress>
         </div>
     </div>
 
