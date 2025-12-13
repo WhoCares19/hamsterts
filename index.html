@@ -266,7 +266,7 @@ config = {
 
     <style>
         #status {
-            display: none;
+            display: inline-block;
             vertical-align: top;
             margin-top: 20px;
             margin-left: 30px;
@@ -275,8 +275,8 @@ config = {
         }
 
         #progress {
-            height: 0;
-            width: 0;
+            height: 20px;
+            width: 300px;
         }
 
         div.emscripten { text-align: center; }
@@ -347,8 +347,8 @@ config = {
 
 <body>
 
-    <div id="transfer" align="center">
-        <img src="Tree.png" style="width:256px; display:block; margin:auto;">
+    <div id="transfer" align=center>
+<!--        <div class="spinner" id='spinner'></div> -->
         <div class="emscripten" id="status">Downloading...</div>
         <div class="emscripten">
             <progress value="0" max="100" id="progress"></progress>
