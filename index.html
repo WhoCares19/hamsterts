@@ -436,13 +436,13 @@ frameborder="1"
 
     function custom_prerun(){
         // no python main and no (MEMFS + VFS) yet.
-        console.log(__FILE__, "custom_prerun")
+        console.log(Tree.png, "custom_prerun")
 
     }
 
     function custom_postrun(){
         // python main and no VFS filesystem yet.
-        console.log(__FILE__, "custom_postrun")
+        console.log(Tree.png, "custom_postrun")
 
         // prevent ff horizontal scroll
         window.addEventListener("keydown", function(e) {
