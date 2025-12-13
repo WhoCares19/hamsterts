@@ -424,7 +424,7 @@ frameborder="1"
     async function custom_onload(debug_hidden) {
         // this is called before anything python is loaded
         // make your js customization here
-        console.log(Tree.png, "custom_onload")
+        console.log(__FILE__, "custom_onload")
 
         pyconsole.hidden = debug_hidden
         system.hidden = debug_hidden
@@ -436,13 +436,13 @@ frameborder="1"
 
     function custom_prerun(){
         // no python main and no (MEMFS + VFS) yet.
-        console.log(Tree.png, "custom_prerun")
+        console.log(__FILE__, "custom_prerun")
 
     }
 
     function custom_postrun(){
         // python main and no VFS filesystem yet.
-        console.log(Tree.png, "custom_postrun")
+        console.log(__FILE__, "custom_postrun")
 
         // prevent ff horizontal scroll
         window.addEventListener("keydown", function(e) {
