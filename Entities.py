@@ -7,7 +7,8 @@ UNIT_DAMAGE = {
     "McUncle": 50,      
     "Bob": 5,           
     "Dracula": 30,      
-    "TheHamster": 20    
+    "TheHamster": 20,
+    "Plague Doctor": 40
 }
 
 BOB_BOOST_PER_UNIT = 0.5
@@ -54,6 +55,8 @@ class Projectile:
         elif shooter_name == "Bob": key = "Bob"
         elif shooter_name == "Dracula": key = "Dracula"
         elif shooter_name == "TheHamster": key = "TheHamster"
+        elif shooter_name == "Plague Doctor": key = "Plague Doctor"
+        
         if key and key in Assets._loaded_projectiles:
             self.image = Assets._loaded_projectiles[key]
         
@@ -204,7 +207,8 @@ class Windmill:
     def get_progress(self):
         return min(1.0, self.cheese_timer / self.CHEESE_GENERATION_TIME)
 
-    def draw(self, screen):
+    def draw_ground(self, screen):
+        """Draws the alfalfa fields and static llamas (Layer 0)"""
         if self.alfalfa_sprite:
             for r, c in self.get_alfalfa_coords():
                 draw_x = c * self.tile_size
@@ -217,10 +221,14 @@ class Windmill:
             img = frames[idx]
             screen.blit(img, (llama['x'], llama['y']))
 
+    def draw_structure(self, screen):
+        """Draws the mill sprite (Layer 1 - Y Sorted)"""
         if self.sprites:
             sprite = self.sprites[self.animation_frame]
             screen.blit(sprite, (self.current_pixel_pos.x, self.current_pixel_pos.y))
-        
+
+    def draw_ui(self, screen):
+        """Draws the progress bar (Layer 2 - Overlay)"""
         bar_w = self.width_tiles * self.tile_size
         bar_h = 8
         x = self.current_pixel_pos.x
@@ -229,6 +237,9 @@ class Windmill:
         pygame.draw.rect(screen, (50, 50, 50), (x, y, bar_w, bar_h))
         pygame.draw.rect(screen, (255, 215, 0), (x, y, bar_w * progress, bar_h))
         pygame.draw.rect(screen, (255, 255, 255), (x, y, bar_w, bar_h), 1)
+
+    def get_bottom_y(self):
+        return self.current_pixel_pos.y + (self.height_tiles * self.tile_size)
 
     def is_pixel_clicked(self, world_pos):
         if not self.sprites or not self.masks: return False
@@ -354,7 +365,8 @@ class Castle:
             new_unit.set_target(rr, rc)
             self.spawned_units.append(new_unit)
 
-    def draw(self, screen):
+    def draw_structure(self, screen):
+        """Draws the castle sprite (Layer 1 - Y Sorted)"""
         if self.sprites:
             sprite = self.sprites[self.animation_frame]
             sprite_x = self.current_pixel_pos.x + (CASTLE_VISUAL_OFFSET_X_TILES * self.tile_size)
@@ -364,7 +376,9 @@ class Castle:
             rect = pygame.Rect(self.current_pixel_pos.x, self.current_pixel_pos.y, self.width_tiles * self.tile_size, self.height_tiles * self.tile_size)
             pygame.draw.rect(screen, CASTLE_BORDER_COLOR, rect, 2)
         if self.flagpole: self.flagpole.draw(screen)
-        
+
+    def draw_ui(self, screen):
+        """Draws health bar and training queue (Layer 2 - Overlay)"""
         bar_width = self.tile_size * self.width_tiles
         bar_height = 8
         
@@ -383,6 +397,9 @@ class Castle:
             pygame.draw.rect(screen, (50, 50, 50), (x, y, bar_width, bar_height))
             pygame.draw.rect(screen, (0, 200, 255), (x, y, bar_width * progress, bar_height))
             pygame.draw.rect(screen, (255, 255, 255), (x, y, bar_width, bar_height), 1)
+
+    def get_bottom_y(self):
+        return self.current_pixel_pos.y + (self.height_tiles * self.tile_size)
 
     def get_occupied_coords(self):
         coords = []
@@ -417,7 +434,7 @@ class Enemy:
     def take_damage(self, amount):
         self.health -= amount
 
-    def update(self, dt, obstacles=set(), castle=None, move_to_castle=False):
+    def update(self, dt, obstacles=set(), castle=None, move_to_castle=False, other_enemies=[]):
         self.animation_timer += dt
         if self.animation_timer >= self.animation_speed:
             if self.frames:
@@ -446,15 +463,28 @@ class Enemy:
                     else: self.facing_right = False
                     
                     current_speed = self.base_speed * self.speed_multiplier
+                    move_vec = norm * current_speed
                     
-                    # Basic movement
-                    self.current_pixel_pos += norm * current_speed
+                    # Separation Logic
+                    sep_vec = pygame.Vector2(0, 0)
+                    for e in other_enemies:
+                        if e is not self and e.health > 0:
+                            dist_to_other = self.current_pixel_pos.distance_to(e.current_pixel_pos)
+                            if dist_to_other < SEPARATION_RADIUS and dist_to_other > 0:
+                                diff = self.current_pixel_pos - e.current_pixel_pos
+                                sep_vec += diff.normalize() * (SEPARATION_FORCE / dist_to_other)
+                    
+                    # Apply movement + separation
+                    self.current_pixel_pos += move_vec + (sep_vec * 0.05)
                     
                     # CLAMP to World Bounds
                     self.current_pixel_pos.x = max(0, min(self.current_pixel_pos.x, WORLD_WIDTH_PX - self.tile_size))
                     self.current_pixel_pos.y = max(0, min(self.current_pixel_pos.y, WORLD_HEIGHT_PX - self.tile_size))
         
         self.speed_multiplier = 1.0
+
+    def get_bottom_y(self):
+        return self.current_pixel_pos.y + self.tile_size
 
     def draw(self, screen):
         if self.frames:
@@ -499,6 +529,10 @@ class Llama:
         self.masks = {} 
         self._generate_masks()
         self.target_unit = None 
+        
+        # Stuck prevention
+        self.last_pos = pygame.Vector2(self.current_pixel_pos)
+        self.stuck_timer = 0.0
         
         self.assigned_zone = None 
         self._choose_next_action() 
@@ -740,6 +774,20 @@ class Llama:
             return 
 
         if self.state == "walk":
+            # Check for "stuck" condition
+            dist_moved = self.current_pixel_pos.distance_to(self.last_pos)
+            if dist_moved < 0.1 * self.speed:
+                self.stuck_timer += dt
+            else:
+                self.stuck_timer = 0.0
+            self.last_pos = pygame.Vector2(self.current_pixel_pos)
+
+            if self.stuck_timer > 0.5:
+                # Force new decision
+                self.stuck_timer = 0.0
+                self._choose_next_action(obstacles, pixel_obstacles, windmills)
+                return
+
             if self.current_pixel_pos.distance_to(self.target_pixel_pos) < self.speed:
                 self.current_pixel_pos = self.target_pixel_pos 
                 self.grid_r = self.target_grid_r
@@ -793,6 +841,11 @@ class Llama:
             return pygame.Surface((self.tile_size, self.tile_size), pygame.SRCALPHA)
         return sprites[self.animation_frame % len(sprites)]
 
+    def get_bottom_y(self):
+        # Llama sprite size
+        llama_render_size = int(self.tile_size * Assets.LLAMA_SCALE_FACTOR)
+        return self.current_pixel_pos.y + llama_render_size
+
     def draw(self, screen):
         sprite = self.get_current_sprite()
         screen.blit(sprite, (self.current_pixel_pos.x, self.current_pixel_pos.y))
@@ -824,10 +877,16 @@ class McUncle:
     def set_target(self, grid_r, grid_c):
         self.target_pixel_pos = pygame.Vector2(grid_c * self.tile_size, grid_r * self.tile_size)
         self.is_moving = True
+        self.state = "walk"
+        self.animation_frame = 0
+        self.animation_timer = 0.0
 
     def set_precise_target(self, x, y):
         self.target_pixel_pos = pygame.Vector2(x, y)
         self.is_moving = True
+        self.state = "walk"
+        self.animation_frame = 0
+        self.animation_timer = 0.0
 
     def update(self, dt, enemies_list=None, projectiles_list=None, obstacles=set(), pixel_obstacles=[], friends=[]):
         self.animation_timer += dt
@@ -932,6 +991,9 @@ class McUncle:
                 self.cooldown_timer = self.attack_cooldown
                 proj = Projectile(my_center, closest_enemy, self.name)
                 projectiles_list.append(proj)
+
+    def get_bottom_y(self):
+        return self.current_pixel_pos.y + self.tile_size
 
     def draw(self, screen):
         frames = self.sprites.get(self.state, self.sprites.get("idle", []))
@@ -1090,6 +1152,9 @@ class Hamster:
                 en_center = enemy.current_pixel_pos + pygame.Vector2(enemy.tile_size/2, enemy.tile_size/2)
                 if my_center.distance_to(en_center) < 200:
                     enemy.speed_multiplier = 0.8 
+
+    def get_bottom_y(self):
+        return self.current_pixel_pos.y + self.tile_size
 
     def draw(self, screen):
         frames = self.sprites.get(self.state, self.sprites.get("idle", []))

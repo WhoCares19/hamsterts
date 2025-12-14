@@ -55,7 +55,7 @@ MCUNCLE_CONFIG = {
     "walk": {"file": "walk_url.png",     "w": 128, "h": 128, "count": 6}
 }
 
-# --- Configuration for Hamsters (Bob, Dracula, TheHamster) ---
+# --- Configuration for Hamsters (Bob, Dracula, TheHamster, Plague Doctor) ---
 HAMSTER_ROOT_FOLDER = "Hamsters"
 HAMSTER_SCALE_FACTOR = 1.0
 
@@ -89,6 +89,14 @@ HAMSTER_CONFIG = {
              "sleep": {"file": "thehamster_sleep.png", "w": 160, "h": 160, "count": 8},
              "win":   {"file": "thehamster_win.png",   "w": 160, "h": 160, "count": 24}
         }
+    },
+    "Plague Doctor": {
+        "subfolder": "Plague_Doctor",
+        "type": "animated_spritesheets",
+        "actions": {
+             "idle":  {"file": "dancer_idle.png", "w": 160, "h": 160, "count": 6},
+             "walk":  {"file": "walk_url.png",    "w": 128, "h": 128, "count": 6}
+        }
     }
 }
 
@@ -98,7 +106,8 @@ PROJECTILE_FILES = {
     "TheHamster": "TheHamsterBag.png",
     "McUncle": "Mcunle_whip.png",
     "Dracula": "DracTeeth.png",
-    "Bob": "BobCakeSlice.png"
+    "Bob": "BobCakeSlice.png",
+    "Plague Doctor": "DancerBell.png"
 }
 PROJECTILE_SCALE_FACTOR = 0.5 
 
@@ -355,9 +364,6 @@ def load_mcuncle_assets(tile_size, search_folders):
     global_scale_ratio = None
     target_height_baseline = int(tile_size * MCUNCLE_SCALE_FACTOR)
     
-    # Attempt to find Idle config to establish baseline scale
-
-
     # 2. Process all states using the determined global scale (if available)
     for state, config in MCUNCLE_CONFIG.items():
         filename = config["file"]
@@ -392,14 +398,14 @@ def load_mcuncle_assets(tile_size, search_folders):
                 # Scale
                 scaled = pygame.transform.scale(cropped, (new_w, new_h))
                 # ---- FIXED CANVAS NORMALIZATION (THIS IS THE FIX) ----
-            canvas_size = tile_size
-            canvas = pygame.Surface((canvas_size, canvas_size), pygame.SRCALPHA)
+                canvas_size = tile_size
+                canvas = pygame.Surface((canvas_size, canvas_size), pygame.SRCALPHA)
 
-            x = (canvas_size - scaled.get_width()) // 2
-            y = (canvas_size - scaled.get_height()) // 2
+                x = (canvas_size - scaled.get_width()) // 2
+                y = (canvas_size - scaled.get_height()) // 2
 
-            canvas.blit(scaled, (x, y))
-            final_frames.append(canvas)
+                canvas.blit(scaled, (x, y))
+                final_frames.append(canvas)
                 
             _loaded_mcuncle_sprites[state] = final_frames
             
@@ -469,6 +475,7 @@ def load_hamster_assets(tile_size, search_folders):
                             break
                         
                         frame_surf = sheet.subsurface(rect)
+                        # This line ensures standard scaling (Direct Stretch) is applied
                         frames.append(pygame.transform.scale(frame_surf, (sprite_size, sprite_size)))
                     
                     _loaded_hamsters[name][state] = frames

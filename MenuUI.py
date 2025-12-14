@@ -34,7 +34,7 @@ class UIControlPanel:
         self.icon_spacing = 15
 
         # Calculate Menu Dimensions
-        num_hamster_items = 4 
+        num_hamster_items = 5 # Updated to 5 to include Plague Doctor
         self.castle_menu_width = (self.icon_size + self.padding) * num_hamster_items + self.padding + (self.icon_spacing * (num_hamster_items - 1)) + 40
         self.castle_menu_height = 160 
 
@@ -58,7 +58,6 @@ class UIControlPanel:
         self.train_mcuncle_rect = pygame.Rect(self.castle_menu_x + self.padding, content_y, self.icon_size, self.icon_size)
         img_mcuncle = None
         
-        # FIX: Check for dictionary structure (idle/walk) vs old list structure
         if "mcuncle" in self.tiles:
             mc_data = self.tiles["mcuncle"]
             if isinstance(mc_data, dict) and "idle" in mc_data and mc_data["idle"]:
@@ -70,7 +69,7 @@ class UIControlPanel:
             "rect": self.train_mcuncle_rect, 
             "img": img_mcuncle, 
             "name": "McUncle", 
-            "price": 30,
+            "price": 0,
             "desc": "Deadly horseman that deals 50 dmg at the enemy."
         })
 
@@ -111,6 +110,21 @@ class UIControlPanel:
             "name": "TheHamster", 
             "price": 10,
             "desc": "Deadly hobo, deals 20 dmg to the enemy and slows them down by 20%"
+        })
+
+        # Plague Doctor (20)
+        self.train_pd_rect = pygame.Rect(self.train_ham_rect.right + self.icon_spacing, content_y, self.icon_size, self.icon_size)
+        img_pd = None
+        if "hamsters" in self.tiles and "Plague Doctor" in self.tiles["hamsters"]:
+            if "idle" in self.tiles["hamsters"]["Plague Doctor"] and self.tiles["hamsters"]["Plague Doctor"]["idle"]:
+                img_pd = pygame.transform.scale(self.tiles["hamsters"]["Plague Doctor"]["idle"][0], (self.icon_size, self.icon_size))
+        
+        self.hamster_buttons.append({
+            "rect": self.train_pd_rect, 
+            "img": img_pd, 
+            "name": "Plague Doctor", 
+            "price": 0,
+            "desc": "Mad doctor, deals 40 dmg to the enemy."
         })
 
         # Rally Point

@@ -330,51 +330,79 @@ def draw(seed, grid, features, ui_control_panel):
 
     world_surface.fill((0,0,0,0)) 
 
-    # Draw grass everywhere
+    # 1. Background (Grass)
     world_surface.blit(tiles["grass"], (0,0)) 
     
-    for name, r, c in features:
-        if name in tiles:
-            world_surface.blit(tiles[name], (c * TILE_SIZE, r * TILE_SIZE)) 
-    
-    if castle:
-        castle.draw(world_surface)
-
-    # Draw Windmills
+    # 2. Ground Layer (Alfalfa, Static Llamas)
     for w in windmills:
-        w.draw(world_surface)
+        w.draw_ground(world_surface)
 
-    # Draw Static Player Objects
+    # 3. Y-Sort Layer (Entities, Structures, Features, Placed Objects)
+    # Collect everything that needs depth sorting
+    renderables = []
+
+    # A. Castle
+    if castle:
+        renderables.append((castle.get_bottom_y(), castle))
+
+    # B. Windmills
+    for w in windmills:
+        renderables.append((w.get_bottom_y(), w))
+
+    # C. Units (Llamas, McUncles, Hamsters, Enemies)
+    all_units = llamas + mcuncles + hamsters + enemies
+    for u in all_units:
+        renderables.append((u.get_bottom_y(), u))
+
+    # D. Static Objects (Map Features)
+    for name, r, c in features:
+        # Calculate approximate bottom Y for static tiles
+        bottom_y = (r + 1) * TILE_SIZE
+        renderables.append((bottom_y, ("static", name, r, c)))
+
+    # E. Player Placed Objects
     for asset_type, r, c in player_placed_objects:
-        if asset_type != "windmill": 
-            if asset_type in tiles:
-                original_image = tiles[asset_type] 
-                world_surface.blit(original_image, (c * TILE_SIZE, r * TILE_SIZE))
+        if asset_type != "windmill": # Windmills are handled as entities
+            bottom_y = (r + 1) * TILE_SIZE
+            renderables.append((bottom_y, ("static", asset_type, r, c)))
 
-        if selected_removable_object and selected_removable_object == (asset_type, r, c):
-            pygame.draw.rect(world_surface, (255, 255, 0), (c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE), 2) 
+    # Sort by Y coordinate (z-index)
+    renderables.sort(key=lambda x: x[0])
+
+    # Draw sorted entities
+    for _, item in renderables:
+        if isinstance(item, (Castle, Windmill)):
+            item.draw_structure(world_surface)
+        elif isinstance(item, (Llama, McUncle, Hamster, Enemy)):
+            item.draw(world_surface)
+        elif isinstance(item, tuple) and item[0] == "static":
+            # Static Object: ("static", name, r, c)
+            _, name, r, c = item
+            if name in tiles:
+                world_surface.blit(tiles[name], (c * TILE_SIZE, r * TILE_SIZE))
+
+    # 4. Overlay Layer (Projectiles, UI Bars, Ghosts, Selection)
     
-    # Highlight selected windmill
-    if selected_removable_object and selected_removable_object[0] == "windmill":
-        wr, wc = selected_removable_object[1], selected_removable_object[2]
-        pygame.draw.rect(world_surface, (255, 255, 0), (wc * TILE_SIZE, wr * TILE_SIZE, TILE_SIZE*2, TILE_SIZE*2), 2)
-
-    for enemy in enemies:
-        enemy.draw(world_surface)
-
-    for llama in llamas:
-        llama.draw(world_surface)
-        
-    for mcuncle in mcuncles:
-        mcuncle.draw(world_surface)
-
-    for hamster in hamsters:
-        hamster.draw(world_surface)
-        
+    # Projectiles (in the air)
     for proj in projectiles:
         proj.draw(world_surface)
-    
-    # Ghosts
+
+    # UI Overlays for structures (Health/Progress Bars)
+    if castle:
+        castle.draw_ui(world_surface)
+    for w in windmills:
+        w.draw_ui(world_surface)
+
+    # Selection Highlights (Static Objects)
+    if selected_removable_object:
+        asset_type, r, c = selected_removable_object
+        pygame.draw.rect(world_surface, (255, 255, 0), (c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE), 2)
+        
+        # Highlight selected windmill if applicable (it's larger)
+        if asset_type == "windmill":
+             pygame.draw.rect(world_surface, (255, 255, 0), (c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE*2, TILE_SIZE*2), 2)
+
+    # Ghosts (Placement Preview)
     if current_tool == "place" and selected_asset_type:
         mouse_x, mouse_y = pygame.mouse.get_pos()
         world_r, world_c = _screen_to_world_grid(mouse_x, mouse_y) 
@@ -425,12 +453,12 @@ def draw(seed, grid, features, ui_control_panel):
         obj_world_y = r * TILE_SIZE
         button_screen_x, button_screen_y = _world_to_screen_pixel(obj_world_x, obj_world_y)
         
-        if asset_type == "windmill":
-            button_screen_x += TILE_SIZE * zoom_level 
-            button_screen_y += TILE_SIZE * zoom_level 
-        else:
-            button_screen_x += TILE_SIZE * zoom_level + DELETE_BUTTON_PADDING
-            button_screen_y += TILE_SIZE * zoom_level + DELETE_BUTTON_PADDING
+        # Adjust button position based on object type size
+        offset_tiles = 1
+        if asset_type == "windmill": offset_tiles = 1 # Button near top-left or adjust as needed
+        
+        button_screen_x += TILE_SIZE * zoom_level + DELETE_BUTTON_PADDING
+        button_screen_y += TILE_SIZE * zoom_level + DELETE_BUTTON_PADDING
 
         delete_text_surface = delete_font.render(DELETE_BUTTON_TEXT, True, DELETE_TEXT_COLOR)
         text_width, text_height = delete_text_surface.get_size()
@@ -438,6 +466,7 @@ def draw(seed, grid, features, ui_control_panel):
         delete_button_rect = pygame.Rect(button_screen_x, button_screen_y, 
                                          text_width + 2 * DELETE_BUTTON_PADDING, 
                                          text_height + 2 * DELETE_BUTTON_PADDING)
+        # Clamp to screen
         delete_button_rect.x = max(0, min(delete_button_rect.x, WIDTH - delete_button_rect.width))
         delete_button_rect.y = max(0, min(delete_button_rect.y, HEIGHT - delete_button_rect.height))
 
@@ -682,7 +711,7 @@ async def main():
                         print(f"Starting Stage {stage_number}, Wave 1")
                     else:
                         survival_wave += 1
-                        game_timer = 5.0 
+                        game_timer = 0.1 
                         print(f"Starting Survival Wave {survival_wave}")
 
             # 2. Timer Logic (Wait for attack)
@@ -708,8 +737,9 @@ async def main():
                     enemies_attacking = False
                     
                     if survival_mode:
-                        game_timer = 10.0 
-                        print(f"Survival Wave {survival_wave} Cleared. Cooldown 10s.")
+                        survival_wave += 1
+                        game_timer = 0.1 # Instant
+                        print(f"Survival Wave {survival_wave} Cleared. Instant start.")
                     else:
                         print(f"Stage {stage_number} - Wave {wave_in_stage} Cleared!")
                         wave_in_stage += 1
@@ -824,6 +854,18 @@ async def main():
                         ui_control_panel.build_menu_active = False 
                         ui_control_panel.castle_menu_active = False
                         ui_control_panel.llama_menu_active = False
+                
+                elif event.key == pygame.K_DELETE:
+                    if selected_units:
+                        # Remove selected units from main lists
+                        for unit in selected_units:
+                            if unit in mcuncles:
+                                mcuncles.remove(unit)
+                            elif unit in hamsters:
+                                hamsters.remove(unit)
+                        # Clear selection
+                        selected_units = []
+                        print("Selected units deleted.")
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if game_over: continue 
@@ -832,7 +874,7 @@ async def main():
                     if btn_continue_rect and btn_continue_rect.collidepoint(event.pos):
                         victory_screen = False
                         survival_mode = True
-                        game_timer = 5.0
+                        game_timer = 0.1
                         print("Entering Survival Mode!")
                     elif btn_restart_rect and btn_restart_rect.collidepoint(event.pos):
                         # Force restart via recursion or event post
