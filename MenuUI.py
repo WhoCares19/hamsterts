@@ -69,7 +69,7 @@ class UIControlPanel:
             "rect": self.train_mcuncle_rect, 
             "img": img_mcuncle, 
             "name": "McUncle", 
-            "price": 0,
+            "price": 30,
             "desc": "Deadly horseman that deals 50 dmg at the enemy."
         })
 
@@ -123,7 +123,7 @@ class UIControlPanel:
             "rect": self.train_pd_rect, 
             "img": img_pd, 
             "name": "Plague Doctor", 
-            "price": 0,
+            "price": 20,
             "desc": "Mad doctor, deals 40 dmg to the enemy."
         })
 
